@@ -318,6 +318,7 @@ export default function Venue() {
             </div>
             <div style={box}><Cheat fontSize={15} /></div>
             <div style={{ ...box, flex: 1, minHeight: 0, overflow: 'hidden', fontSize: 14 }}>
+              {recent.length === 0 && <div style={{ color: '#8fa0b0' }}>last readings appear here</div>}
               {recent.map((r, i) => (
                 <div key={i} style={{ color: r.kind === 'Rejected' ? '#ffb4a8' : r.kind === 'Enrolled' ? '#7cc4ff' : '#e6edf3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {r.kind === 'Rejected' ? `✗ refused: ${r.reason}`
