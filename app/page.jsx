@@ -1,11 +1,11 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { enrol, sign, measure, hasCredential } from '../lib/passkey.js';
+import { zoneOf, HOME_ZONE, COLS, N, cellHex } from '../lib/zones.js';
 
-const COLS = 6; const N = 24;
-const cellHex = (i) => '0x' + i.toString(16).padStart(64, '0');
 const OPINIONS = [['unusable', 0], ['poor', 1], ['ok', 2], ['excellent', 3]];
 const COLOR = ['#c0392b', '#e08e0b', '#c9b920', '#2ecc71'];
+const MAX_ACCURACY = 200;
 
 export default function Home() {
   const [device, setDevice] = useState(null);
@@ -15,6 +15,7 @@ export default function Home() {
   const [cell, setCell] = useState(null);
   const [result, setResult] = useState(null);
   const [st, setSt] = useState(null);
+  const [where, setWhere] = useState('locating…');
 
   useEffect(() => {
     setSaved(!!hasCredential());
@@ -24,25 +25,49 @@ export default function Home() {
     return () => clearInterval(t);
   }, []);
 
+  // One fix, asked once. A zone is 6×4 over the whole site, so ±200 m is already generous —
+  // past that the honest answer is "we are assuming the middle of the building", and we say so.
+  useEffect(() => {
+    const assume = (why) => { setCell(HOME_ZONE); setWhere(`location: CIC (assumed) — ${why}`); };
+    if (!navigator.geolocation) return assume('this browser has no geolocation');
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const { latitude, longitude, accuracy } = p.coords;
+        if (accuracy > MAX_ACCURACY) return assume(`fix uncertain by ±${Math.round(accuracy)} m`);
+        const { zone, distance } = zoneOf(latitude, longitude);
+        if (distance > 260) return assume(`you are ~${distance} m outside the grid`);
+        setCell(zone);
+        setWhere(`zone ${zone + 1} of ${N} · fix ±${Math.round(accuracy)} m · ${distance} m from its centre`);
+      },
+      (e) => assume(e.code === 1 ? 'you declined' : 'no fix in time'),
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
+    );
+  }, []);
+
   async function doEnrol() {
     setBusy('enrol'); setNote('Unlock your passkey — this proves possession of a key your phone cannot export.');
     try {
-      const { x, y } = await enrol();
+      const { x, y, via } = await enrol();
       const proof = await sign(crypto.getRandomValues(new Uint8Array(32)));
       const r = await fetch('/api/enrol', { method: 'POST', body: JSON.stringify({ x, y, proof }) }).then((r) => r.json());
       if (!r.ok) throw new Error(r.error ?? 'rejected');
       setDevice(r.deviceId);
       if (r.exists) {
-        setNote('Device already on this record. Trust: ' + r.trust);
+        setNote(`Device already on this record. Trust: ${r.trust} · key read from the ${via}`);
       } else {
         setNote('Signature checked; waiting for the enrolment to land in a block…');
         const rc = r.pending ? await settle(r) : { status: 'success', gasUsed: r.gasUsed };
         setNote(rc?.status === 'success'
-          ? `Enrolled onchain. ${rc.gasUsed} gas · tx ${r.tx.slice(0, 14)}…`
+          ? `Enrolled onchain via ${via}. ${rc.gasUsed} gas · tx ${r.tx.slice(0, 14)}…`
           : `Broadcast, not in a block yet — the map will pick it up. tx ${r.tx.slice(0, 14)}…`);
       }
-    } catch (e) { setNote('Enrol failed: ' + e.message); }
+    } catch (e) { setNote('Enrol failed: ' + e.message); report('enrol', e.message); }
     setBusy('');
+  }
+
+  // the note is on someone else's phone; the log is on my machine
+  function report(stage, message) {
+    fetch('/api/diag', { method: 'POST', body: JSON.stringify({ stage, message, ua: navigator.userAgent }) }).catch(() => {});
   }
 
   async function attest(opinion) {
@@ -74,7 +99,7 @@ export default function Home() {
           setNote('Still in flight — the map picks it up on the next poll.');
         }
       }
-    } catch (e) { setNote('Failed: ' + e.message); }
+    } catch (e) { setNote('Failed: ' + e.message); report('attest', e.message); }
     setBusy('');
   }
 
@@ -121,8 +146,12 @@ export default function Home() {
         {device ? '✓ Device enrolled' : saved ? 'Re-enrol passkey' : '1 · Enrol this phone'}
       </button>
 
+      <div style={{ fontSize: 14, color: cell === HOME_ZONE ? '#e08e0b' : '#9fb0c0', margin: '0 0 10px' }}>
+        {where}{cell !== null && cell !== HOME_ZONE ? ' · tap another square to override' : ''}
+      </div>
+
       <div style={{ fontSize: 14, color: '#9fb0c0', marginBottom: 6 }}>
-        2 · Tap your cell above &nbsp; 3 · Then: how does the network feel here?
+        2 · {cell === null ? 'Tap your cell above' : `Zone ${cell + 1} selected — tap another to change`} &nbsp; 3 · Then: how does the network feel here?
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
         {OPINIONS.map(([label, v]) => (
