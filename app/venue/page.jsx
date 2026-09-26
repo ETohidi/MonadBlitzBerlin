@@ -47,8 +47,11 @@ export default function Venue() {
           <div style={{ display: 'flex', gap: 26, marginTop: 20, fontSize: 19, color: '#cfd8e0', flexWrap: 'wrap' }}>
             <span><b>{st?.devices ?? 0}</b> devices</span>
             <span><b>{st?.totalAccepted ?? 0}</b> attestations onchain</span>
-            <span style={{ color: '#e08e0b' }}><b>{st?.totalRejected ?? 0}</b> rejected</span>
+            <span style={{ color: '#e08e0b' }}><b>{st?.totalRejected ?? 0}</b> refused</span>
             <span><b>{st?.secondsPerBlock ?? '–'}</b>s per block</span>
+          </div>
+          <div style={{ marginTop: 12, fontSize: 16, color: '#7f8fa0' }}>
+            each reading carries a P-256 verify at 6,900 gas; ≈104k gas in a batch of five
           </div>
         </div>
 
