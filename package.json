@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "prebuild": "node script/compile.mjs",
-    "sim": "node script/deploy_demo.mjs"
+    "test": "node --env-file-if-exists=.env.local test/cose.mjs",
+    "sim": "node --env-file-if-exists=.env.local script/deploy_demo.mjs",
+    "mock": "node --env-file-if-exists=.env.local script/mock_phone.mjs"
   },
   "dependencies": {
     "next": "^15.5.4",
