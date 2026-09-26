@@ -1,145 +1,75 @@
-# Ground Truth — the room is the sensor network
+# Ground Truth — a map with no owner
 
-**Live on Monad testnet: <https://ground-truth-zeta.vercel.app>** — projector at
-[`/venue`](https://ground-truth-zeta.vercel.app/venue) (a [`/venue/flat`](https://ground-truth-zeta.vercel.app/venue/flat)
-fallback if the tiles do not load), phones behind the QR on that page.
+Every map of a place has an owner, and the owner can edit it. Coverage maps are the plainest case: the company that sells the network also publishes the map of how good it is. Today we built the other kind. A phone signs two things together inside its secure element: what the person says about the network where they are standing, and what the phone measured at that moment. A contract on Monad checks the signature and adds the reading to the map, and the map is the contract's own storage, not a database behind a website. It runs at https://ground-truth-zeta.vercel.app (the projector view is /venue) against contract 0x01dab65ecd7CE158c131c69ef8347e883118F55F on Monad testnet, chain 10143.
 
-Scan a QR code, tap how the network feels where you are standing. Your phone also measures
-the network — latency, jitter, downlink — and signs **both** the claim and the measurement
-with a key inside its secure element. A contract on Monad verifies that signature with the
-P-256 precompile and writes the reading down. The projector shows a map of the venue being
-built by the venue, and a running count of the attacks the chain just refused.
+## What the chain proves, and what it doesn't
 
-## Why this needs a chain at all
+It proves who signed a reading. The signature comes from a P-256 key that the phone's secure element will not export, and the contract checks it against the key that device enrolled with. It proves each reading counts once, because every device has a counter the contract only lets go up, so a replay is refused and a missing reading shows up as a gap. And it proves nobody changed a reading afterwards: there is no function that edits or deletes one.
 
-Coverage and QoE data today is either self-reported with no provenance, or sold by the vendor
-who has an interest in it. Every serious attempt at "trustworthy data exchange" in data spaces
-has retreated from *settlement* to *tamper-evident receipts* — the IDS Clearing House, the piece
-that used to notarise and settle data usage, was archived read-only in June 2025. That is the
-honest state of the art: what a buyer of shared measurements needs first is not a payment
-rail, it is evidence that the measurement existed, when, and from whom.
+It does not prove the measurement is true. The browser measures latency, jitter and downlink and the phone signs whatever it got. Someone in control of their own phone can sign a made-up measurement just as easily.
 
-So the chain is deliberately **not in the control loop**. 0.3-second blocks are already far too
-slow for a radio decision, and nothing about congestion control belongs on a ledger. The chain is
-the *accountability layer* — the record that is disputed later.
+Our relay pays the gas and submits for everyone, so it can delay a reading or drop it. It cannot write a reading nobody signed, and it cannot change the zone, the opinion or the measurement of one that was signed. Before sending, it rebuilds the exact bytes the phone signed from the values it is about to write, and refuses the submission if they differ.
 
-## What each attestation proves
+On chain are the opinion, the measured grade, the zone and a hash of the full signed reading. The raw latency, jitter and downlink numbers are not. The map needs only the grade, and every extra field would cost gas on every tap. The hash is there so that whoever holds the raw numbers can show later that they are the ones that were signed. It also means the chain on its own cannot confirm that a signature covers the values stored next to it. That check happens in the relay.
 
-| property | mechanism |
-| --- | --- |
-| authorship | a P-256 signature from a non-exportable platform key, verified at `0x0100` |
-| not written after the fact | a monotonic per-device counter; a hole in it is visible as a hole |
-| nobody edits the record | append-only commitments, indexed by device + counter + payload hash |
-| the map is not an opinion | per-zone aggregates live in contract storage, not in a cache |
-| where it was measured | the zone starts from the phone's own geolocation, snapped to a ~200 m grid — the fix never leaves the device, only the zone id is signed. A tap can be overridden, and a wrong one is outvoted by the other devices in that zone |
-| claiming is costly | trust rises when the tap agrees with the device's own measurement, falls when a confident claim is contradicted |
+## How a tap becomes chain state
 
-The last row is the answer to reward farming. There is nothing to volume-mine: a redundant or
-dishonest reading costs the reporter their trust score, and the score is what any future buyer
-of this record would weight it by.
+The QR code on the projector opens a page with the building's 24 zones and three buttons: poor, ok, excellent. The page measures the network in the background while it is open, so a tap goes straight to the Face ID or fingerprint prompt instead of waiting on a download first. On a phone that has never been here, the tap creates a passkey, reads its public key and then signs the reading, which is one tap and two prompts. The signed reading holds the device's next counter, the zone, the opinion, the measurement and a timestamp. The relay checks the signature in Node, checks that it covers exactly those values, and sends a transaction. For a new phone that transaction goes through Multicall3 and carries both the enrolment and the reading, so a first tap is on the map in a single block. After that every tap is one call to commitBatch, which verifies the signature on chain, moves the counter, adjusts the device's trust and adds the reading to its zone's totals. The phone shows "sent" as soon as the relay has the reading and the block number once the receipt comes back.
 
-## Numbers measured on Monad testnet (chain 10143, 26 Sep 2026)
+## Three things about Monad that shaped the design
 
-- P-256 signature verification: **6,900 gas** (EIP-7951 precompile, one staticcall)
-- one attestation alone: **169k gas** — 5 batched into one transaction: **≈104k each**
-- the full scripted demo run — 3 enrolments, 7 accepted readings, 3 refusals — cost **0.14 MON**; deploying the contract cost another 0.14
-- block time during the session: **0.30–0.34 s**
-- contract: one file, ~4.9 KB, 0 warnings, no constructor, no ownership, no upgrade path
+The public RPC answers eth_getLogs for at most 100 blocks, about 30 seconds at the block times we saw. Our first map was rebuilt from events, and it forgot the room half a minute after people stopped tapping. We moved the map into contract storage instead. Each zone keeps a count and running sums in one slot, and the projector reads all 24 zones in one Multicall3 call. Events now only feed the ticker of the last few seconds.
 
-## What the stage demo attacks, on chain
+Two transactions from the same wallet conflict on Monad, because the nonce is state rather than a queue. With one sponsor wallet paying for everyone, we could not fire a transaction per request in parallel. The relay sends one at a time. When a send times out it re-broadcasts the identical signed bytes rather than letting the client library sign again with a fresh nonce, which would have paid twice. commitBatch takes an array and never reverts on a bad entry. Each entry comes back accepted or refused with a reason, which is why a batch of attacks can go in next to honest readings and the refusals are visible.
 
-Four hostile submissions go into one `commitBatch` in front of the audience:
+P-256 verification is a precompile on Monad, EIP-7951 at address 0x0100, at a fixed 6,900 gas. Passkeys sign with P-256, so the contract checks a phone's own signature directly. There is no wallet, no key the attendee has to look after, and no account abstraction layer in between. Before writing anything else we checked that the precompile answers on testnet (script/p256_probe.mjs). A valid signature returns 1 and a tampered hash returns nothing.
 
-1. **replay** — yesterday's reading, resubmitted → `Rejected(StaleCounter)`
-2. **ghost key** — a valid signature from a key that was never enrolled → `Rejected(UnknownDevice)`
-3. **forgery** — a signature made by the wrong key over a registered device id → `Rejected(BadSignature)`
-4. **confident lie** — the phone measured the worst grade, the human tapped "excellent" → accepted, trust 1025 → **665**
+## Numbers, measured today on the testnet
 
-`commitBatch` never reverts: a refusal is a result, and a result the room can see is worth more
-than a reverted transaction. The negative control runs the other way — a tampered DER signature
-on `enrol` *must* revert, and the deploy script fails the build if it doesn't.
+- P-256 verification: 6,900 gas, the precompile's fixed price. A bare call to it estimated at 30,799 gas, which includes the 21,000 transaction base and the calldata.
+- One attestation on its own: 169,542 to 170,431 gas per transaction across eleven single commits, plus one at 149,023.
+- Five attestations in one batch: 542,918 gas for the transaction, 108,583.6 each, or 104,383.6 each if the 21,000 base is left out.
+- Enrolment on its own: 157,182 to 157,674 gas. The very first enrolment on the fresh contract took 177,916.
+- A new phone's first tap, enrolment and reading together in one Multicall3 transaction: 295,850 gas, measured once.
+- Reading the whole map, 24 zones in one Multicall3 call: 28 ms median over eight calls from our laptop.
+- Block time: 0.311 s on average over the 32,806 blocks between our deployment and 16:42 today.
+- Try to cheat, pressed four times: each press sends a replayed reading, a reading from a key that never enrolled and a forged signature over a real device, all in one transaction. All twelve came back refused (stale counter, unknown device, bad signature), at 126,853 to 127,092 gas per press.
+- Trust: every device starts at 1000. A tap that matches the measured grade adds 25, one step off adds 5, and each further step costs 120. On chain today that took one device from 1025 to 665 for tapping excellent over a measured unusable, and a new device from 1000 to 760 for tapping unusable over a measured ok.
+- The contract is 4,923 bytes deployed, with no constructor, no owner and no upgrade path. At the time of writing it holds 20 accepted readings, 15 refusals and 16 devices.
 
-## Sixty seconds on stage
+## Trust model
 
-1. **Scan** — the QR on the projector opens the page. No app, no wallet, no seed phrase.
-2. **Tap** — the phone's own location pre-selects the zone it is standing in; one tap says how
-   the network *feels* there. The browser measures latency, jitter and downlink at the same moment.
-3. **Signed in hardware** — Face ID signs claim + measurement together. The private half leaves
-   the secure element never, and this server cannot make that signature.
-4. **Verified for 6,900 gas** — the contract recovers the enrolled public key and calls the P-256
-   precompile. The number is on the screen next to the transaction link.
-5. **Attacker refused** — replay, ghost key and forgery go in as a batch and come back as named
-   refusals in the ticker, at the same time as real readings.
-6. **Liar's trust drops live** — a phone that measured the worst grade and tapped "excellent" is
-   accepted (it did sign) and scored down in public: 1025 → 665. The map weights by that score.
+The measurement is self-reported. The phone runs the probes and signs the result, and nothing on chain can tell a real 40 ms from a typed-in one. What we can do is make a claim cost something. Trust rises when what a person taps agrees with what their own phone measured, and it falls fast when a confident claim contradicts it. A phone that reports excellent from a dead corner pays for it in public.
 
-**Same contract, other sensors.** Nothing here is about wifi. The device id, the counter, the
-signed payload and the scoring rule are all generic: a photo of a platform scored by a model for
-cleanliness, a transit ride's experience, an air-quality reading from a phone on a windowsill —
-same enrolment, same 6,900-gas check, same refusal of a replay. The venue grid is the first cell
-of a city's data layer, and the city's data layer is what a buyer pays to read.
+Against a phone that lies consistently, measurement and opinion both, the defence is redundancy. Other devices report from the same zone at the same time, and a buyer of the data re-measures before relying on it.
 
-## Trust model, stated plainly
+Enrolment is trust on first use. Any key that can sign for itself can register. We do not check Apple's or Google's attestation chains, so the contract knows a passkey, not a person, and one person with three devices is three reporters.
 
-**What the chain proves:** who signed, that they signed it once, and that nobody can edit or
-backdate it afterwards. The signed challenge covers the device id, the zone, the raw measurements,
-the grade derived from them, the tapped opinion and the timestamp. The one field the chain assigns
-is the per-device `counter` — a sequence number the reporter picks for itself is not a sequence
-number.
-**What it does not prove:** that the radio measurement was truthful. The measurement is
-self-reported into the signature, so a determined reporter can lie *consistently* — grade and
-opinion both fabricated. The defence is redundancy: independent devices in the same zone at the
-same time, and a buyer who re-measures. That is exactly the assumption GEODNET gets away with,
-and the same limit it has.
-**Sybil:** one passkey is one device, not one person. Apple/Android key-attestation chains would
-close this and are deliberately not validated here — enrolment is trust-on-first-enrol, proved by
-a signature from the key being registered.
-**The sponsor** pays the gas and can delay or censor a submission. It cannot forge one, because
-authorship travels in the device signature.
-**Attendees** never install a wallet, never hold a key onchain, and never give a precise
-position: a coarse zone, one tap, and only the public half of a key pair.
+There is no reward for reports. A reward would give people a reason to send more of them, and volume is exactly what an attacker can produce cheaply. We would rather the score be something a buyer weights readings by than something a reporter farms.
 
-## Run it
+## What is not proven
+
+The map colours are an unweighted mean of taps. Trust exists per device, but the zone totals in storage carry no weights, so the colours ignore it.
+
+The check that a signature covers the stored values happens in our relay, not in the contract, and the raw measurements are not kept anywhere yet. So at the moment nobody except the relay, at the moment of submission, can confirm that a reading's hash matches its numbers.
+
+The contract's revoke function has no access check, so anyone can revoke any device. We found it tonight. Fixing it needs a new deployment, which we ruled out for the demo.
+
+The zones were fitted by eye to satellite imagery, and they are smaller than phone GPS can resolve. The phone suggests a zone and the person picks one.
+
+Some readings on the contract came from our rehearsal scripts, signed with keys generated in Node rather than by phones.
+
+The one-tap first enrolment has landed on chain once. We have not yet had a room full of phones on it.
+
+## Running it
+
+Copy .env.example to .env.local and set RPC_URL to a Monad testnet endpoint, SPONSOR_PRIVATE_KEY to a burner key funded from the testnet faucet, and NEXT_PUBLIC_REGISTRY_ADDRESS to the contract above. Then:
 
 ```bash
 npm ci
-npm run prebuild                 # solc-js -> out/*.abi.json, out/*.bin, lib/abi.js
-npm run sim                      # deploy + full assertion suite against testnet, ~30s
-npm run dev                      # http://localhost:3000  (attendee)  /venue  (projector)
-node script/mock_phone.mjs http://127.0.0.1:3000 8   # scripted attendees, no phones needed
+npm run prebuild   # compiles the contract with solc-js and writes lib/abi.js
+npm test           # the passkey key parser against every shape we have seen
+npm run dev
 ```
 
-Deploy it publicly — passkeys require HTTPS on a real hostname, and a locally hosted demo is
-disqualified anyway:
-
-```bash
-npx vercel          # env: RPC_URL, SPONSOR_PRIVATE_KEY, NEXT_PUBLIC_REGISTRY_ADDRESS
-```
-
-`SPONSOR_PRIVATE_KEY` is a testnet-only burner, minted from <https://faucet.monad.xyz>.
-`.address` is written by `npm run sim`; set `NEXT_PUBLIC_REGISTRY_ADDRESS` to the same value in
-the deployed app, since the file is gitignored.
-
-## Layout
-
-```
-contracts/GroundTruth.sol   devices, cells, commitments, batch commit, scoring
-lib/attest.mjs              WebAuthn-shaped attestation factory (Node, same curve and encoding)
-lib/passkey.js              browser side: enrol, sign, measure; a CBOR walk of the attestation, no dep
-lib/zones.js                the 24-zone grid over CIC Berlin: lat/lng <-> zone id, shared by phone and globe
-lib/chain.mjs               sponsor: sign-then-broadcast, serialised, bounded receipt wait
-app/                        attendee page, /venue globe, /venue/flat, /api/{enrol,attest,state,receipt,attack,qr,ping,diag}
-script/compile.mjs          solc-js wrapper            (no Foundry install needed to build)
-script/p256_probe.mjs       the de-risking proof: does precompile 0x0100 answer on Monad?
-script/deploy_demo.mjs      deploy + assertions, exits non-zero if any claim fails
-script/mock_phone.mjs       replay mode for an empty room or dead wifi
-```
-
-Three Monad-specific things that shaped the design:
-
-- **Two transactions from the same wallet always conflict** (the nonce is state, not a queue),
-  so the sponsor batches many attestations into one `commitBatch` and serialises sends per instance.
-- **The public RPC caps `eth_getLogs` at a 100-block range** — about 30 seconds — which is why the
-  map lives in contract storage and logs are only the last-minute ticker.
-- **P-256 is a native precompile**, which is the only reason a per-tap hardware signature is
-  affordable at 6,900 gas.
+Passkeys need HTTPS on a real hostname, so phones have to use the deployed site. script/mock_phone.mjs refuses to run unless ALLOW_MOCK=1 is set, and refuses to point at the production relay. npm run sim deploys a new contract whenever the build changes, and it is switched off for now. Everything here is testnet only, and the sponsor key should never hold anything of value.
