@@ -260,7 +260,6 @@ export default function Venue() {
   }, []);
 
   const cells = st?.cells ?? {};
-  const recent = (st?.recent ?? []).slice(-8).reverse();
   const h = hover != null ? cells[hover] : null;
 
   return (
@@ -304,7 +303,7 @@ export default function Venue() {
             </div>
           )}
 
-          <aside style={{ position: 'absolute', top: 16, right: 16, bottom: 44, width: PANEL - 60, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <aside style={{ position: 'absolute', top: 16, right: 16, width: PANEL - 60, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {origin && (
               <img src={`/api/qr?target=${encodeURIComponent(origin)}`} width={240} height={240}
                 style={{ background: '#fff', borderRadius: 12, padding: 6, alignSelf: 'center' }} alt="Scan to report" />
@@ -317,16 +316,6 @@ export default function Venue() {
               <span style={{ gridColumn: '1 / -1', color: '#c9d4de' }}>6,900 gas per signature check</span>
             </div>
             <div style={box}><Cheat fontSize={15} /></div>
-            <div style={{ ...box, flex: 1, minHeight: 0, overflow: 'hidden', fontSize: 14 }}>
-              {recent.length === 0 && <div style={{ color: '#8fa0b0' }}>last readings appear here</div>}
-              {recent.map((r, i) => (
-                <div key={i} style={{ color: r.kind === 'Rejected' ? '#ffb4a8' : r.kind === 'Enrolled' ? '#7cc4ff' : '#e6edf3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {r.kind === 'Rejected' ? `✗ refused: ${r.reason}`
-                    : r.kind === 'Enrolled' ? '+ new phone enrolled'
-                      : `✓ tapped ${WORD[r.opinion]} · measured ${WORD[r.grade]} · trust ${r.trust}`}
-                </div>
-              ))}
-            </div>
           </aside>
         </>
       )}
