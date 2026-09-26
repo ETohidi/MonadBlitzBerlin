@@ -6,6 +6,14 @@
 import { newDevice, attest } from '../lib/attest.mjs';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3000';
+if (process.env.ALLOW_MOCK !== '1') {
+  console.error('refusing: mock_phone writes synthetic readings to the contract. Set ALLOW_MOCK=1 to run it.');
+  process.exit(1);
+}
+if (new URL(BASE).hostname.endsWith('.vercel.app')) {
+  console.error(`refusing: ${BASE} is the production relay. Mock readings never go through it.`);
+  process.exit(1);
+}
 const COUNT = Number(process.argv[3] ?? 3);
 const N = 24;
 const cellHex = (i) => '0x' + i.toString(16).padStart(64, '0');
@@ -37,13 +45,13 @@ async function get(path) {
 console.log(`${BASE} — ${COUNT} scripted attendees`);
 for (let i = 0; i < COUNT; i++) {
   const d = newDevice();
-  const proof = attest(d, { counter: 1, opinion: 2, grade: 2 });
+  const m = radio();
+  const proof = attest(d, { counter: 1, opinion: 2, grade: 2, lat: m.lat, jitter: m.jitter, down: m.down });
   const e = await post('/api/enrol', { x: d.xHex, y: d.yHex, proof: numeric(proof) });
   if (!e.json?.ok) { console.log(`  enrol failed: ${JSON.stringify(e.json)}`); continue; }
   const pending = e.json.pending ? await settleFor(e.json.tx) : null;
   console.log(`  device ${d.id.slice(0, 10)}… ${e.json.exists ? 'was already enrolled' : 'enrolled'}${e.json.pending ? ` (block ${pending?.block ?? '…'})` : ''}`);
 
-  const m = radio();
   const cell = Math.floor(Math.random() * N);
   const ts = Date.now();
   const opinion = Math.max(0, Math.min(3, m.grade + (Math.random() < 0.25 ? 1 : 0))); // sometimes optimistic

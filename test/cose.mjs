@@ -2,7 +2,7 @@
 // from Node's WebAuthn-shaped factory, so its output is checked here directly: a real
 // CBOR-encoded P-256 key must come back as the same coordinates that verify a signature,
 // out of every wrapper a vendor is known to use — and a failure must say what it saw.
-import { coseXY } from '../lib/passkey.js';
+import { coseXY, keyOf } from '../lib/passkey.js';
 import { verifySig } from '../lib/chain.mjs';
 import { newDevice, attest } from '../lib/attest.mjs';
 
@@ -55,7 +55,9 @@ const check = (name, got, want) => {
 };
 
 const d = newDevice();
-const sig = attest(d, { counter: 1, opinion: 2, grade: 2 });
+const sig = attest(d, { counter: 1, opinion: 2, grade: 2, lat: 40, jitter: 8, down: 90000 });
+try { attest(d, { counter: 1, opinion: 2, grade: 2 }); console.log('  FAIL  attest without a measurement: no throw'); failed++; }
+catch (e) { check('attest without a measurement throws', e.message.includes('lat is required'), true); }
 const accepts = (name, input) => {
   const k = coseXY(input);
   check(name, k.xHex === d.xHex && k.yHex === d.yHex, true);
@@ -63,7 +65,7 @@ const accepts = (name, input) => {
 };
 
 // --- every wrapper a passkey is known to use ------------------------------------
-accepts('bare COSE_Key (what getPublicKey returns)', coseKeyBytes(d.xHex, d.yHex));
+accepts('bare COSE_Key', coseKeyBytes(d.xHex, d.yHex));
 accepts('bare COSE_Key, indefinite-length map', coseKeyIndef(d.xHex, d.yHex));
 const wrapped = accepts('attestationObject → authData (Safari with no getPublicKey)',
   attestationObject(authData(d.xHex, d.yHex)));
@@ -87,6 +89,26 @@ check('undefined offer falls through to the next shape', coseXY(undefined, coseK
 check('null offer falls through too', coseXY(null, coseKeyBytes(d.xHex, d.yHex)).xHex, d.xHex);
 check('garbage offer falls through too', coseXY(new Uint8Array(0), attestationObject(authData(d.xHex, d.yHex))).xHex, d.xHex);
 
+// --- getPublicKey() returns SPKI DER, not COSE and not authData -----------------
+// exact header seen from Chrome on macOS; its byte 32 (0x8d there) once read as authData flags
+const SPKI_HDR = '3059301306072a8648ce3d020106082a8648ce3d030107034200';
+const spki = (xHex, yHex) => bytes(SPKI_HDR + '04' + xHex.slice(2) + yHex.slice(2));
+check('SPKI is 91 bytes', spki(d.xHex, d.yHex).length, 91);
+accepts('SPKI DER (what getPublicKey returns)', spki(d.xHex, d.yHex));
+
+// --- the real call site: keyOf(PublicKeyCredential) -----------------------------
+const ab = (u) => u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength);
+const cred = (response, rawIdLen = 20) => ({ rawId: new ArrayBuffer(rawIdLen), response });
+const iphone = keyOf(cred({ attestationObject: ab(attestationObject(authData(d.xHex, d.yHex), 'none')) }));
+check('iPhone shape: attestationObject ArrayBuffer, no getPublicKey', iphone.xHex === d.xHex && iphone.yHex === d.yHex && iphone.via, 'attestationObject');
+const mac = keyOf(cred({ attestationObject: ab(attestationObject(authData(d.xHex, d.yHex))), getPublicKey: () => ab(spki(d.xHex, d.yHex)) }, 32));
+check('Chrome shape: both present, attestationObject wins', mac.xHex === d.xHex && mac.via, 'attestationObject');
+const spkiOnly = keyOf(cred({ attestationObject: ab(Uint8Array.from([0xa0])), getPublicKey: () => ab(spki(d.xHex, d.yHex)) }));
+check('broken attestationObject falls through to SPKI getPublicKey', spkiOnly.yHex === d.yHex && spkiOnly.via, 'getPublicKey');
+check('extracted key via call site verifies the attestation', verifySig(iphone.xHex, iphone.yHex, sig), true);
+try { keyOf({ rawId: new ArrayBuffer(20) }); console.log('  FAIL  credential without .response: no throw'); failed++; }
+catch (e) { check('credential without .response says so', e.message.includes('no .response'), true); }
+
 // --- failures must explain themselves ------------------------------------------
 const expectThrow = (name, input, needle) => {
   try { coseXY(input); console.log(`  FAIL  ${name}: no throw`); failed++; }
@@ -101,6 +123,8 @@ expectThrow('accessor returned null', null, 'null');
 expectThrow('accessor returned text', 'aGVsbG8', 'text');
 expectThrow('accessor returned zero bytes', new Uint8Array(0), 'empty buffer');
 expectThrow('AT flag clear, no key embedded', authData(d.xHex, d.yHex, { flags: 0x05, withKey: false }), 'AT flag clear');
+expectThrow('SPKI with a compressed point', bytes(SPKI_HDR + '02' + d.xHex.slice(2) + d.yHex.slice(2)), 'not uncompressed');
+expectThrow('SPKI of another curve', bytes(SPKI_HDR.replace('030107', '030108') + '04' + d.xHex.slice(2) + d.yHex.slice(2)), 'not a P-256 key');
 expectThrow('junk CBOR', Uint8Array.from([0xa0, 0x00, 0x01]), 'no P-256 key');
 expectThrow('attestationObject without authData',
   Uint8Array.from([0xa2, ...txt('fmt'), ...txt('none'), ...txt('attStmt'), 0xa0]), 'without authData');
