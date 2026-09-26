@@ -12,6 +12,7 @@
     "mock": "node --env-file-if-exists=.env.local script/mock_phone.mjs"
   },
   "dependencies": {
+    "maplibre-gl": "^5.24.0",
     "next": "^15.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
