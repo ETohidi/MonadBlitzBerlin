@@ -9,6 +9,7 @@ const COLOR = ['#c0392b', '#e08e0b', '#c9b920', '#2ecc71'];
 
 export default function Home() {
   const [device, setDevice] = useState(null);
+  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState('');
   const [note, setNote] = useState('');
   const [cell, setCell] = useState(null);
@@ -16,6 +17,7 @@ export default function Home() {
   const [st, setSt] = useState(null);
 
   useEffect(() => {
+    setSaved(!!hasCredential());
     const load = () => fetch('/api/state').then((r) => r.json()).then(setSt).catch(() => {});
     load();
     const t = setInterval(load, 4000);
@@ -86,7 +88,7 @@ export default function Home() {
 
       <button onClick={doEnrol} disabled={!!busy || !!device}
         style={{ width: '100%', padding: '14px', marginBottom: 10, border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 17, background: device ? '#1d2530' : '#2ecc71', color: device ? '#7f8fa0' : '#04120a' }}>
-        {device ? '✓ Device enrolled' : hasCredential() ? 'Re-enrol passkey' : '1 · Enrol this phone'}
+        {device ? '✓ Device enrolled' : saved ? 'Re-enrol passkey' : '1 · Enrol this phone'}
       </button>
 
       <div style={{ fontSize: 14, color: '#9fb0c0', marginBottom: 6 }}>

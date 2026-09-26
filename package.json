@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "prebuild": "node script/compile.mjs",
+    "sim": "node script/deploy_demo.mjs"
   },
   "dependencies": {
     "next": "^15.5.4",

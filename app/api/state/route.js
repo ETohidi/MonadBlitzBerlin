@@ -13,7 +13,9 @@ export async function GET() {
   const from = head > WINDOW ? head - WINDOW : 0n;
   const logs = await pub.getLogs({ address, fromBlock: from, toBlock: head });
 
+  const REASON = ['Accepted', 'unknown device', 'revoked device', 'stale counter (replay)', 'bad signature'];
   const cells = {};
+  const recent = [];
   let accepted = 0; let rejected = 0;
   const devicesSeen = new Set();
   for (const l of logs) {
@@ -27,7 +29,11 @@ export async function GET() {
       c.n++; c.grade += ev.args.grade; c.opinion += ev.args.opinion;
       c.worst = Math.min(c.worst, ev.args.grade);
       c.last = { opinion: ev.args.opinion, grade: Number(ev.args.grade), trust: String(ev.args.trust) };
-    } else if (ev.eventName === 'Rejected') rejected++;
+      recent.push({ kind: 'Committed', device: ev.args.deviceId, opinion: Number(ev.args.opinion), grade: Number(ev.args.grade), trust: String(ev.args.trust) });
+    } else if (ev.eventName === 'Rejected') {
+      rejected++;
+      recent.push({ kind: 'Rejected', device: ev.args.deviceId, reason: REASON[Number(ev.args.reason)] ?? 'rejected' });
+    }
   }
 
   const [totalAccepted, totalRejected, block, oldest] = await Promise.all([
@@ -41,7 +47,7 @@ export async function GET() {
 
   return NextResponse.json({
     ok: true, head: String(head), accepted, rejected, totalAccepted: String(totalAccepted),
-    totalRejected: String(totalRejected), devices: devicesSeen.size,
+    totalRejected: String(totalRejected), devices: devicesSeen.size, recent,
     secondsPerBlock: (span / blocks).toFixed(2), cells,
   });
 }

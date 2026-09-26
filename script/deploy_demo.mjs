@@ -19,8 +19,8 @@ const account = privateKeyToAccount(process.env.SPONSOR_PRIVATE_KEY);
 const pub = createPublicClient({ transport: http(RPC) });
 const wlt = createWalletClient({ account, chain: monadTestnet, transport: http(RPC) });
 
-const abi = JSON.parse(fs.readFileSync('out/GroundTruth.abi.json', 'utf8'));
-const bytecode = '0x' + fs.readFileSync('out/GroundTruth.bin', 'utf8').trim();
+const abi = JSON.parse(fs.readFileSync(process.cwd() + '/out/GroundTruth.abi.json', 'utf8'));
+const bytecode = '0x' + fs.readFileSync(process.cwd() + '/out/GroundTruth.bin', 'utf8').trim();
 
 const bal = await pub.getBalance({ address: account.address });
 console.log(`sponsor ${account.address}\n  balance ${(Number(bal) / 1e18).toFixed(4)} MON`);
