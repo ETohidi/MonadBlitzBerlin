@@ -16,6 +16,7 @@ const GERMANY_BOX = [5.87, 47.27, 15.04, 55.06];
 const BERLIN = [13.405, 52.52];
 const CIC = [CENTRE.lng, CENTRE.lat];
 const FLY_MS = 2000;
+const HINT = { 1: 'click Germany', 2: 'click Berlin', 3: 'click the marker' };
 const PANEL = 400;
 
 const BOUNDS = (() => {
@@ -270,6 +271,14 @@ export default function Venue() {
         <div style={{ ...box, textAlign: 'center', padding: '12px 26px' }}>
           <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1 }}>Ground Truth</div>
           <div style={{ fontSize: 21, color: '#dfe7ee' }}>Reported by everyone, edited by no one.</div>
+          {view < 4 ? (
+            <button onClick={() => goRef.current(view + 1)}
+              style={{ pointerEvents: 'auto', marginTop: 6, background: 'none', border: 0, padding: '2px 6px', color: '#9fb0c0', fontSize: 16, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 3 }}>
+              {HINT[view]}
+            </button>
+          ) : (
+            <div style={{ marginTop: 6, color: '#9fb0c0', fontSize: 16 }}>scan to report from your phone · keys 8 / 9 for more</div>
+          )}
         </div>
       </header>
 
