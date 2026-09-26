@@ -1,5 +1,8 @@
 # Ground Truth — the room is the sensor network
 
+**Live on Monad testnet: <https://ground-truth-zeta.vercel.app>** — projectors at
+[`/venue`](https://ground-truth-zeta.vercel.app/venue), phones behind the QR on that page.
+
 Scan a QR code, tap how the network feels where you are standing. Your phone also measures
 the network — latency, jitter, downlink — and signs **both** the claim and the measurement
 with a key inside its secure element. A contract on Monad verifies that signature with the
@@ -57,7 +60,10 @@ on `enrol` *must* revert, and the deploy script fails the build if it doesn't.
 ## Trust model, stated plainly
 
 **What the chain proves:** who signed, that they signed it once, and that nobody can edit or
-backdate it afterwards.
+backdate it afterwards. The signed challenge covers the device id, the zone, the raw measurements,
+the grade derived from them, the tapped opinion and the timestamp. The one field the chain assigns
+is the per-device `counter` — a sequence number the reporter picks for itself is not a sequence
+number.
 **What it does not prove:** that the radio measurement was truthful. The measurement is
 self-reported into the signature, so a determined reporter can lie *consistently* — grade and
 opinion both fabricated. The defence is redundancy: independent devices in the same zone at the

@@ -10,18 +10,25 @@ import { pub, send, deviceOf, address, abi } from '../../../lib/chain.mjs';
 import { newDevice, attest } from '../../../lib/attest.mjs';
 
 export async function POST() {
-  if (!address()) return NextResponse.json({ ok: false, error: 'no contract' }, { status: 500 });
-  const head = await pub.getBlockNumber();
-  const logs = await pub.getLogs({ address: address(), fromBlock: head > 900n ? head - 900n : 0n, toBlock: head });
+  const to = address();
+  if (!to) return NextResponse.json({ ok: false, error: 'no contract' }, { status: 500 });
 
+  // The public RPC answers eth_getLogs for at most 100 blocks, so walk back a few
+  // windows until we find a device that really is on the record.
+  const head = await pub.getBlockNumber();
   let target = null;
-  for (let i = logs.length - 1; i >= 0; i--) {
-    try {
-      const ev = decodeEventLog({ abi, data: logs[i].data, topics: logs[i].topics });
-      if (ev.eventName === 'Committed') { target = { id: ev.args.deviceId, counter: Number(ev.args.counter) }; break; }
-    } catch { /* ignore */ }
+  for (let page = 0; page < 10 && !target; page++) {
+    const high = head - BigInt(page * 100);
+    const low = high > 100n ? high - 100n : 0n;
+    const logs = await pub.getLogs({ address: to, fromBlock: low, toBlock: high });
+    for (let i = logs.length - 1; i >= 0; i--) {
+      try {
+        const ev = decodeEventLog({ abi, data: logs[i].data, topics: logs[i].topics });
+        if (ev.eventName === 'Committed') { target = { id: ev.args.deviceId, counter: Number(ev.args.counter) }; break; }
+      } catch { /* ignore */ }
+    }
   }
-  if (!target) return NextResponse.json({ ok: false, error: 'no enrolled device to attack yet' }, { status: 400 });
+  if (!target) return NextResponse.json({ ok: false, error: 'no attested device in the last few minutes — tap once on a phone, then retry' }, { status: 400 });
 
   const cell = '0x' + '0'.repeat(64);
   const signedWithWrongKey = newDevice();

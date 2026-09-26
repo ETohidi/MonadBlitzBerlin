@@ -19,3 +19,5 @@ AllInfo/
 out/
 .address
 .env.local
+.vercel
+.env*
