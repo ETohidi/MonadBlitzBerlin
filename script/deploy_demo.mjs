@@ -19,8 +19,8 @@ const account = privateKeyToAccount(process.env.SPONSOR_PRIVATE_KEY);
 const pub = createPublicClient({ transport: http(RPC) });
 const wlt = createWalletClient({ account, chain: monadTestnet, transport: http(RPC) });
 
-const abi = JSON.parse(fs.readFileSync('out/contracts/GroundTruth.sol:GroundTruth.abi.json', 'utf8'));
-const bytecode = '0x' + fs.readFileSync('out/contracts/GroundTruth.sol:GroundTruth.bin', 'utf8').trim();
+const abi = JSON.parse(fs.readFileSync('out/GroundTruth.abi.json', 'utf8'));
+const bytecode = '0x' + fs.readFileSync('out/GroundTruth.bin', 'utf8').trim();
 
 const bal = await pub.getBalance({ address: account.address });
 console.log(`sponsor ${account.address}\n  balance ${(Number(bal) / 1e18).toFixed(4)} MON`);
@@ -61,8 +61,20 @@ console.log(`\nDEPLOYED ${ADDRESS}  status=${drc.status}  gas=${drc.gasUsed}  ${
 if (drc.status !== 'success') process.exit(1);
 
 const devices = [newDevice(), newDevice(), newDevice()];
-console.log('ENROL (trust-on-first-enrol; signature proves key possession)');
-for (const d of devices) report(await tx(ADDRESS, 'enrol', [d.xHex, d.yHex, attest(d, { counter: 1, opinion: 2, grade: 2 })]), d.id.slice(0, 14));
+console.log('ENROL — this is the Solidity DER-parser test; a bad parse reverts here');
+for (const d of devices) {
+  const rc = report(await tx(ADDRESS, 'enrol', [d.xHex, d.yHex, attest(d, { counter: 1, opinion: 2, grade: 2 })]), d.id.slice(0, 14));
+  if (rc.status !== 'success') { console.error('\nFATAL: Solidity rejected a signature Node accepted -> DER parser bug in enrol()'); process.exit(1); }
+}
+console.log('  DER parser PASS: contract accepted 3 hardware-shaped P-256 signatures');
+
+console.log('\nNEGATIVE CONTROL (each of these MUST revert)');
+try {
+  const bad = attest(devices[0], { counter: 9, opinion: 2, grade: 2 });
+  bad.derSignature = bad.derSignature.slice(0, 40) + (bad.derSignature[40] === 'f' ? 'e' : 'f') + bad.derSignature.slice(41);
+  const r = await tx(ADDRESS, 'enrol', [devices[0].xHex, devices[0].yHex, bad]);
+  console.log('  forged signature on enrol:', r.rc.status === 'success' ? 'ACCEPTED — CONTRACT IS BROKEN' : 'reverted, as it must');
+} catch (e) { console.log('  forged signature on enrol: reverted before sending,', (e.shortMessage ?? e.message).slice(0, 60)); }
 
 const honest = [
   attest(devices[0], { counter: 2, opinion: 2, grade: 2 }),

@@ -21,8 +21,9 @@ if (warnings.length) console.log(warnings.map((w) => ' - ' + w.message).join('\n
 
 for (const [file, contracts] of Object.entries(out.contracts ?? {})) {
   for (const [cname, c] of Object.entries(contracts)) {
-    fs.writeFileSync(`out/${file}:${cname}.abi.json`, JSON.stringify(c.abi, null, 2));
-    fs.writeFileSync(`out/${file}:${cname}.bin`, c.evm.bytecode.object);
+    const safe = cname;
+    fs.writeFileSync(`out/${safe}.abi.json`, JSON.stringify(c.abi));
+    fs.writeFileSync(`out/${safe}.bin`, c.evm.bytecode.object);
     console.log(`OK ${cname}  bytecode ${(c.evm.bytecode.object.length - 2) / 2} bytes  deploy gas ${c.evm.gasEstimates.creation.total}`);
     console.log('   ' + c.abi.filter((x) => x.type === 'function').map((f) => f.name).join(', '));
   }

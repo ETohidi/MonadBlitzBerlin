@@ -21,6 +21,7 @@ contract GroundTruth {
         uint64 counter;
         uint8 opinion;       // what the human tapped: 0 unusable .. 3 excellent
         uint8 grade;         // what the hardware measured for the same instant
+        bytes32 cell;        // coarse zone, self-selected; never a precise location
         bytes32 payloadHash; // keccak of the full signed reading
         bytes authenticatorData;
         bytes clientDataJSON;
@@ -34,7 +35,7 @@ contract GroundTruth {
 
     event Enrolled(bytes32 indexed deviceId, uint256 x, uint256 y);
     event Revoked(bytes32 indexed deviceId);
-    event Committed(bytes32 indexed deviceId, uint64 counter, uint8 opinion, uint8 grade, uint128 trust);
+    event Committed(bytes32 indexed deviceId, uint64 counter, bytes32 cell, uint8 opinion, uint8 grade, uint128 trust);
     event Rejected(bytes32 indexed deviceId, Reason indexed reason, uint64 counter);
 
     function _p256(bytes32 h, bytes32 r, bytes32 s, uint256 x, uint256 y) private view returns (bool) {
@@ -122,7 +123,7 @@ contract GroundTruth {
             d.trust = _score(d.trust, a.opinion, a.grade);
             accepted++;
             totalAccepted++;
-            emit Committed(a.deviceId, a.counter, a.opinion, a.grade, d.trust);
+            emit Committed(a.deviceId, a.counter, a.cell, a.opinion, a.grade, d.trust);
         }
         totalRejected += rejected;
     }
