@@ -83,9 +83,15 @@ demo target is a Vercel deployment (`vercel.json` sets per-route `maxDuration`).
 **API routes (`app/api/*/route.js`)**, all `runtime = 'nodejs'`, `dynamic = 'force-dynamic'`:
 - `enrol` — verifies the signature cheaply in Node (`verifySig`, Node's own `crypto`, no
   chain call) before spending gas on `enrol()`.
-- `attest` — same cheap pre-check, then reads the device's `lastCounter` to compute the next
-  counter itself (the client never supplies it) and submits a single-element `commitBatch`.
-  Uses the contract's `isCommitted` view as a dedupe check before resubmitting.
+- `attest` — the attendee page's only write path. Validates the reading, verifies the signature
+  in Node, computes the next counter from on-chain `lastCounter`, then rebuilds the signed
+  reading (`lib/reading.js`) and refuses the submission unless the WebAuthn challenge is its
+  sha256. The contract never checks that binding; only this route does. A device the chain
+  doesn't know yet sends its x/y, and the relay puts `enrol` + `commitBatch` into one
+  Multicall3 `aggregate3` transaction (the tap's signature doubles as the enrolment proof).
+  Uses `isCommitted` as a dedupe check before resubmitting.
+- `device` — returns a device's next counter; the phone fetches it before the tap because
+  the counter is part of what it signs.
 - `state` — the one endpoint both the attendee page and `/venue` poll. Reads all 24 cells +
   three counters in **one Multicall3 call** (`0xcA11bde...CA11`, canonical on Monad), plus a
   short `eth_getLogs` window for the "recent" ticker — capped at ~100 blocks because **the
@@ -110,21 +116,25 @@ be exercised without any phone in the loop.
 
 **`lib/passkey.js`** — the only browser-side crypto/WebAuthn code. Includes a small
 hand-written CBOR decoder (`decode`/`head`) used to extract the P-256 x/y coordinates from
-whatever shape a given phone's passkey hands back (bare COSE_Key, full attestationObject, or
-raw authenticatorData) — written out explicitly rather than byte-scanned because vendors
+whatever shape a given phone's passkey hands back (`attestationObject` property, SPKI DER
+from `getPublicKey()`, bare COSE_Key, or raw authenticatorData) — written out explicitly rather than byte-scanned because vendors
 disagree on the shape and a scan would hide that disagreement instead of surfacing it in the
-error message. Also owns `enrol()`, `sign()`, and the client-side network `measure()` that
-produces the `grade` (0..3) baked into every signed attestation.
+error message. Also owns `enrol()` (device kept in `localStorage`), `sign()`, and the
+client-side network `measure()` that produces the `grade` (0..3) baked into every signed
+attestation; `measure()` returns `null` rather than a stand-in value when a probe fails.
 
-**`lib/zones.js`** — the single source of truth for the 24-zone (6×4) grid over the venue
-(CIC Berlin coordinates hardcoded as `CENTRE`). Shared by the attendee page (zone selection
-from geolocation) and the `/venue` globe (drawing the same rectangles) — a zone id
+**`lib/zones.js`** — the single source of truth for the 24-zone (6×4) grid. `FOOTPRINT` is the
+building as a quadrilateral (four corners read off Esri imagery); the grid is mapped into it
+bilinearly, so cells narrow toward the SE end, and `zoneOf` inverts that mapping. Zone ids are
+row-major with 0 at the NW end and must not change: they are what is on chain. Also holds the
+shared red/amber/green palette. Shared by the attendee page and `/venue` — a zone id
 (`cellHex`) is the *only* location information that ever reaches the chain.
 
-**`app/`** — `page.jsx` is the attendee flow (enrol → geolocate-to-zone → measure → sign →
-`/api/attest`); `venue/page.jsx` is the MapLibre-based projector globe reading `/api/state`;
-`venue/flat/page.jsx` is a dependency-free 2D fallback view for when tiles don't load on
-venue wifi.
+**`app/`** — `page.jsx` is the attendee page: the zone map plus three opinion buttons; one tap
+creates the passkey if needed, signs a background-measured reading and posts it to
+`/api/attest`. `venue/page.jsx` is the projector: four click-driven MapLibre states (globe →
+Germany → Berlin on OSM → building on Esri imagery), keys 1–4 / Escape / M, and panels on
+keys 8 and 9. `venue/flat/page.jsx` is a map-free fallback reached only by URL.
 
 ## Things to know before changing code here
 
