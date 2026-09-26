@@ -73,22 +73,27 @@ function countPill() {
 const box = { background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', borderRadius: 14, padding: '14px 18px', color: '#fff' };
 
 const PANELS = {
-  8: [
-    ['Built for Monad', [
-      '100-block eth_getLogs cap on the public RPC → the map is contract storage, read through Multicall3: 24 cells in 31 ms',
-      'Two transactions from one wallet conflict (nonce is state) → batching: 104,383 gas per attestation in a batch of five vs ~169,500 alone',
-      "P-256 precompile (EIP-7951) → verifying a phone's passkey signature costs 6,900 gas",
-      'Blocks every 0.3 s → a tap is on the map before the phone is back in the pocket',
-    ]],
-  ],
-  9: [
-    ['Same contract, other sensors', [
-      'A photo of a street, scored by a model',
-      'A bus arrival, timed by the phone',
-      'An air sensor, read by the phone',
-    ]],
-    ['Who pays', ['Whoever has to be believed — the operator reporting coverage, the city reporting a corridor.']],
-  ],
+  8: {
+    heading: 'A map with no owner',
+    cards: [
+      ['Nobody can edit it. Not us.', 'The contract has no owner, no pause button, no upgrade switch.'],
+      ['Your phone is the signer.', "No wallet, no app, no token. The contract checks the phone's own signature for 6,900 gas."],
+      ['On the map before the phone is in your pocket.', 'A block every 0.3 seconds on Monad.'],
+      ['Anyone can read it without asking us.', 'The map is contract storage, not our database. 24 cells in 31 ms.'],
+    ],
+  },
+  9: {
+    heading: 'Same contract, other questions',
+    cards: [
+      ['Is there really 5G here?', 'Coverage maps are published by the operators. Phones that were there sign what they got.'],
+      ['Did the bus actually come?', 'The phone at the stop signs the time it arrived.'],
+      ['How long is the line at BER, really?', 'The phone signs when it joined and when it cleared.'],
+      ['Is this street as clean as the city says?', 'A photo, scored by a model, signed by the phone that took it.'],
+      ['How loud is it under the flight path at night?', "The phone's microphone, signed, at 3 a.m."],
+      ['Was the earthquake alert real?', "A thousand phones' accelerometers, signed, not one agency's press release."],
+    ],
+    footer: 'Paid for by whoever needs to be believed.',
+  },
 };
 
 export default function Venue() {
@@ -330,17 +335,17 @@ export default function Venue() {
       </footer>
 
       {panel && (
-        <section style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-          <div style={{ ...box, background: 'rgba(0,0,0,.6)', maxWidth: '82vw', padding: '4.5vh 4vw' }}>
-            {PANELS[panel].map(([heading, lines], k) => (
-              <div key={heading} style={{ marginTop: k ? '5vh' : 0 }}>
-                <div style={{ fontSize: 'min(6.4vh, 4vw)', fontWeight: 800, lineHeight: 1.1, marginBottom: '2.4vh' }}>{heading}</div>
-                {lines.map((l) => (
-                  <div key={l} style={{ fontSize: 'min(3.7vh, 2.3vw)', lineHeight: 1.3, margin: '1.6vh 0', color: '#e6edf3' }}>{lines.length > 1 ? '· ' : ''}{l}</div>
-                ))}
+        <section style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4vh', padding: '5vh 5vw', boxSizing: 'border-box', overflow: 'hidden', color: '#fff' }}>
+          <div style={{ fontSize: 'min(7vh, 4.4vw)', fontWeight: 800, lineHeight: 1.1, textAlign: 'center' }}>{PANELS[panel].heading}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${PANELS[panel].cards.length > 4 ? 3 : 2}, 1fr)`, gap: '2.4vh 1.6vw', width: '100%', maxWidth: PANELS[panel].cards.length > 4 ? '90vw' : '76vw' }}>
+            {PANELS[panel].cards.map(([large, small]) => (
+              <div key={large} style={{ background: 'rgba(255,255,255,.08)', border: '1px solid rgba(255,255,255,.14)', borderRadius: 18, padding: '3.2vh 1.8vw' }}>
+                <div style={{ fontSize: PANELS[panel].cards.length > 4 ? 'min(4vh, 2.3vw)' : 'min(4.8vh, 2.8vw)', fontWeight: 800, lineHeight: 1.15 }}>{large}</div>
+                <div style={{ fontSize: PANELS[panel].cards.length > 4 ? 'min(2.6vh, 1.5vw)' : 'min(3vh, 1.8vw)', lineHeight: 1.35, marginTop: '1.4vh', color: '#d5dee6' }}>{small}</div>
               </div>
             ))}
           </div>
+          {PANELS[panel].footer && <div style={{ fontSize: 'min(3.6vh, 2.2vw)', fontWeight: 700, textAlign: 'center' }}>{PANELS[panel].footer}</div>}
         </section>
       )}
     </main>
