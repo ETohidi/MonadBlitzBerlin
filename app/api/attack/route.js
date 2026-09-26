@@ -35,21 +35,26 @@ export async function POST() {
   const ghost = newDevice();
   const d = await deviceOf(target.id);
 
-  const stale = { ...attest(signedWithWrongKey, { counter: target.counter, opinion: 3, grade: 3, cell }), deviceId: target.id, counter: BigInt(target.counter) };
-  const unregistered = attest(ghost, { counter: 1, opinion: 0, grade: 0, cell });
-  const forged = { ...attest(signedWithWrongKey, { counter: BigInt(target.counter) + 1n, opinion: 3, grade: 3, cell }), deviceId: target.id, counter: BigInt(target.counter) + 1n };
+  // The attacker's claimed measurement: refused on chain before anything is written, never displayed.
+  const claim = { lat: 1, jitter: 0, down: 999999 };
+  const stale = { ...attest(signedWithWrongKey, { counter: target.counter, opinion: 3, grade: 3, cell, ...claim }), deviceId: target.id, counter: BigInt(target.counter) };
+  const unregistered = attest(ghost, { counter: 1, opinion: 0, grade: 0, cell, ...claim });
+  const forged = { ...attest(signedWithWrongKey, { counter: BigInt(target.counter) + 1n, opinion: 3, grade: 3, cell, ...claim }), deviceId: target.id, counter: BigInt(target.counter) + 1n };
 
-  const r = await send('commitBatch', [[stale, unregistered, forged]]);
-  const REASON = ['Accepted', 'unknown device', 'revoked device', 'stale counter — replay', 'bad signature'];
-  const refused = [];
+  const r = await send('commitBatch', [[stale, unregistered, forged]], { wait: 40_000 });
+  if (!r.rc) return NextResponse.json({ ok: false, error: `broadcast, not in a block yet: ${r.hash}` }, { status: 504 });
+  const REASON = ['Accepted', 'UnknownDevice', 'Revoked', 'StaleCounter', 'BadSignature'];
+  // commitBatch emits exactly one Committed or Rejected per element, in submission order
+  const outcomes = [];
   for (const l of r.rc.logs) {
     try {
       const ev = decodeEventLog({ abi, data: l.data, topics: l.topics });
-      if (ev.eventName === 'Rejected') refused.push(REASON[Number(ev.args.reason)] ?? 'rejected');
+      if (ev.eventName === 'Rejected') outcomes.push(REASON[Number(ev.args.reason)] ?? 'Rejected');
+      if (ev.eventName === 'Committed') outcomes.push('Accepted');
     } catch { /* ignore */ }
   }
   return NextResponse.json({
-    ok: true, refused, tx: r.hash, gasUsed: String(r.rc.gasUsed), costMono: r.costMono,
+    ok: true, outcomes, refused: outcomes.filter((o) => o !== 'Accepted'), tx: r.hash, gasUsed: String(r.rc.gasUsed), costMono: r.costMono,
     note: `device under attack lastCounter=${d.lastCounter} trust=${d.trust} — nothing was written`,
   });
 }
