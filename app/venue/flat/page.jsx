@@ -46,7 +46,7 @@ export default function Venue() {
             <span><b>{st?.secondsPerBlock ?? '–'}</b>s per block</span>
           </div>
           <div style={{ marginTop: 12, fontSize: 16, color: '#7f8fa0' }}>
-            each reading carries a P-256 verify at 6,900 gas; ≈104k gas in a batch of five
+            each reading carries a P-256 verify at 6,900 gas; 108,584 gas per reading in a batch of five vs about 169,500 alone
           </div>
         </div>
 

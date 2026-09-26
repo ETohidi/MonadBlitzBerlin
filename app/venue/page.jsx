@@ -79,7 +79,7 @@ const PANELS = {
       ['Nobody can edit it. Not us.', 'The contract has no owner, no pause button, no upgrade switch.'],
       ['Your phone is the signer.', "No wallet, no app, no token. The contract checks the phone's own signature for 6,900 gas."],
       ['On the map before the phone is in your pocket.', 'A block every 0.3 seconds on Monad.'],
-      ['Anyone can read it without asking us.', 'The map is contract storage, not our database. 24 cells in 31 ms.'],
+      ['Anyone can read it without asking us.', 'The map is contract storage, not our database. 24 cells in 28 ms.'],
     ],
   },
   9: {

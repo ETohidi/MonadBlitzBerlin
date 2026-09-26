@@ -28,7 +28,7 @@ P-256 verification is a precompile on Monad, EIP-7951 at address 0x0100, at a fi
 
 - P-256 verification: 6,900 gas, the precompile's fixed price. A bare call to it estimated at 30,799 gas, which includes the 21,000 transaction base and the calldata.
 - One attestation on its own: 169,542 to 170,431 gas per transaction across eleven single commits, plus one at 149,023.
-- Five attestations in one batch: 542,918 gas for the transaction, 108,583.6 each, or 104,383.6 each if the 21,000 base is left out.
+- Five attestations in one batch: 542,918 gas for the transaction, 108,584 per attestation, against about 169,500 for one sent alone.
 - Enrolment on its own: 157,182 to 157,674 gas. The very first enrolment on the fresh contract took 177,916.
 - A new phone's first tap, enrolment and reading together in one Multicall3 transaction: 295,850 gas, measured once.
 - Reading the whole map, 24 zones in one Multicall3 call: 28 ms median over eight calls from our laptop.
@@ -53,7 +53,7 @@ The map colours are an unweighted mean of taps. Trust exists per device, but the
 
 The check that a signature covers the stored values happens in our relay, not in the contract, and the raw measurements are not kept anywhere yet. So at the moment nobody except the relay, at the moment of submission, can confirm that a reading's hash matches its numbers.
 
-The contract's revoke function has no access check, so anyone can revoke any device. We found it tonight. Fixing it needs a new deployment, which we ruled out for the demo.
+Anyone with a funded wallet can revoke any device, because the contract's revoke function has no access check. A revoked phone re-enrols with one tap. Fixing it needs a new deployment.
 
 The zones were fitted by eye to satellite imagery, and they are smaller than phone GPS can resolve. The phone suggests a zone and the person picks one.
 
