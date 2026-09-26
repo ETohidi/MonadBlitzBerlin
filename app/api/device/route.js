@@ -12,7 +12,7 @@ export async function GET(req) {
   try {
     const d = await deviceOf(id);
     const known = BigInt(d.x) !== 0n;
-    return NextResponse.json({ ok: true, known, next: String(d.lastCounter + 1n) });
+    return NextResponse.json({ ok: true, known, revoked: known && d.revoked, next: String(d.lastCounter + 1n) });
   } catch (e) {
     return NextResponse.json({ ok: false, error: String(e.shortMessage ?? e.message) }, { status: 500 });
   }

@@ -34,9 +34,9 @@ async function settle(tx, deadline = 45_000) {
   return null;
 }
 
-async function nextCounter(deviceId) {
+async function deviceState(deviceId) {
   const r = await fetch(`/api/device?id=${deviceId}`).then((x) => x.json()).catch(() => null);
-  return r?.ok ? BigInt(r.next) : null;
+  return r?.ok ? { next: BigInt(r.next), revoked: !!r.revoked } : null;
 }
 
 export default function Home() {
@@ -45,7 +45,7 @@ export default function Home() {
   const [cells, setCells] = useState({});
   // Measured in the background so a tap goes straight to the passkey prompt: iOS Safari
   // refuses a WebAuthn call that comes too long after the gesture that asked for it.
-  const latest = useRef({ m: null, at: 0, counter: null, running: false });
+  const latest = useRef({ m: null, at: 0, counter: null, revoked: false, running: false });
   const tapping = useRef(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -59,7 +59,9 @@ export default function Home() {
       // a failed probe clears the old value rather than letting it pass for a current one
       Object.assign(l, m ? { m, at: Date.now() } : { m: null, at: 0 });
       const d = storedDevice();
-      l.counter = d ? await nextCounter(d.deviceId) : null;
+      const ds = d ? await deviceState(d.deviceId) : null;
+      l.counter = ds?.next ?? null;
+      l.revoked = !!ds?.revoked;
     } finally { l.running = false; }
   }
 
@@ -81,6 +83,29 @@ export default function Home() {
     return () => { clearInterval(t); clearInterval(c); };
   }, []);
 
+  async function submit(device, stored, opinion) {
+    const l = latest.current;
+    // a key the chain has never seen starts at 1; a stored one uses the counter fetched before the tap
+    const counter = stored ? (l.counter ?? (await deviceState(device.deviceId))?.next) : 1n;
+    if (counter == null) throw new Error('relay unreachable, tap again');
+    const m = l.m;
+    const ts = Date.now();
+    const cell = cellHex(zone);
+    const reading = readingJSON({ deviceId: device.deviceId, counter, opinion, grade: m.grade, cell, lat: m.lat, jitter: m.jitter, down: m.down, ts });
+    const ch = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(reading)));
+    const sig = await sign(ch, device.id);
+    setStatus('sent');
+    const r = await fetch('/api/attest', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId: device.deviceId, x: device.x, y: device.y, opinion, grade: m.grade, cell, lat: m.lat, jitter: m.jitter, down: m.down, ts, sig }),
+    }).then((x) => x.json());
+    if (r.revoked) return { revoked: true };
+    if (r.error || (!r.ok && r.accepted == null && !r.pending)) throw new Error(r.reason ?? r.error ?? 'refused');
+    if (r.deduped) return { deduped: true };
+    const rc = r.block ? r : await settle(r.tx);
+    return rc?.reason === 'revoked device' ? { revoked: true } : rc;
+  }
+
   async function tap(opinion) {
     const l = latest.current;
     if (!l.m || Date.now() - l.at > 2 * FRESH_MS) {
@@ -91,26 +116,14 @@ export default function Home() {
     tapping.current = true;
     setBusy(true); setStatus('');
     try {
-      const stored = storedDevice();
-      const device = stored ?? await enrol();
-      // a key the chain has never seen starts at 1; a known one uses the counter fetched before the tap
-      const counter = stored ? (l.counter ?? await nextCounter(device.deviceId)) : 1n;
-      if (counter == null) throw new Error('relay unreachable, tap again');
-      const m = l.m;
-      const ts = Date.now();
-      const cell = cellHex(zone);
-      const reading = readingJSON({ deviceId: device.deviceId, counter, opinion, grade: m.grade, cell, lat: m.lat, jitter: m.jitter, down: m.down, ts });
-      const ch = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(reading)));
-      const sig = await sign(ch, device.id);
-      setStatus('sent');
-      const r = await fetch('/api/attest', {
-        method: 'POST',
-        body: JSON.stringify({ deviceId: device.deviceId, x: device.x, y: device.y, opinion, grade: m.grade, cell, lat: m.lat, jitter: m.jitter, down: m.down, ts, sig }),
-      }).then((x) => x.json());
-      if (r.error || (!r.ok && r.accepted == null && !r.pending)) throw new Error(r.reason ?? r.error ?? 'refused');
-      if (r.deduped) return setStatus('onchain ✓');
-      const rc = r.block ? r : await settle(r.tx);
+      // Anyone can revoke any device on this contract. A revoked phone gets a fresh passkey,
+      // which the relay enrols and attests in one transaction; the person only sees "sent".
+      const stored = l.revoked ? null : storedDevice();
+      let rc = await submit(stored ?? await enrol(), !!stored, opinion);
+      if (rc?.revoked) rc = await submit(await enrol(), false, opinion);
       if (!rc) setStatus('sent · not in a block yet');
+      else if (rc.revoked) throw new Error('refused, tap again');
+      else if (rc.deduped) setStatus('onchain ✓');
       else if (rc.accepted === false) setStatus(`refused onchain · block ${rc.block}`);
       else setStatus(`onchain ✓ block ${rc.block}`);
     } catch (e) {

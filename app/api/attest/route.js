@@ -28,6 +28,8 @@ export async function POST(req) {
     if (!known && !(x && y && deviceIdOf(x, y).toLowerCase() === String(deviceId).toLowerCase())) {
       return NextResponse.json({ ok: false, reason: 'unknown device and no key to enrol it with' }, { status: 400 });
     }
+    // anyone can revoke any device on this contract; the phone answers with a fresh passkey
+    if (known && d.revoked) return NextResponse.json({ ok: false, revoked: true, reason: 'device revoked' }, { status: 409 });
     if (!verifySig(known ? d.x : x, known ? d.y : y, sig)) {
       return NextResponse.json({ ok: false, reason: 'signature rejected before it cost anything' }, { status: 400 });
     }
@@ -59,15 +61,16 @@ export async function POST(req) {
 
     let trust = String(d.trust);
     let accepted = null;
+    let revoked = false;
     for (const l of r.rc.logs) {
       try {
         const ev = decodeEventLog({ abi, data: l.data, topics: l.topics });
         if (ev.eventName === 'Committed') { accepted = true; trust = String(ev.args.trust); }
-        if (ev.eventName === 'Rejected') accepted = false;
+        if (ev.eventName === 'Rejected') { accepted = false; revoked = Number(ev.args.reason) === 2; }
       } catch { /* ignore */ }
     }
     return NextResponse.json({
-      ok: accepted === true, accepted, trust, counter: String(counter), tx: r.hash,
+      ok: accepted === true, accepted, revoked, trust, counter: String(counter), tx: r.hash,
       gasUsed: String(r.rc.gasUsed), costMono: r.costMono, block: String(r.rc.blockNumber),
       latency: Date.now() - ts,
     });
