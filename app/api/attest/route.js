@@ -11,14 +11,20 @@ export async function POST(req) {
   const { deviceId, opinion, grade, cell, lat, jitter, down, ts, sig } = b;
   try {
     const d = await deviceOf(deviceId);
-    if (d.x === 0n) return NextResponse.json({ ok: false, reason: 'unknown device — enrol first' }, { status: 400 });
+    // bytes32 decodes to a hex string, so compare numerically: `x === 0n` is never true
+    if (BigInt(d.x) === 0n) return NextResponse.json({ ok: false, reason: 'unknown device — enrol first' }, { status: 400 });
     if (!verifySig(d.x, d.y, sig)) {
       return NextResponse.json({ ok: false, reason: 'signature rejected before it cost anything' }, { status: 400 });
     }
     const counter = d.lastCounter + 1n;
     const payloadHash = keccak256(toBytes(JSON.stringify({ deviceId, counter: String(counter), opinion, grade, cell, lat, jitter, down, ts })));
     const att = { deviceId, counter, opinion, grade, cell, payloadHash, ...sig };
-    const r = await send('commitBatch', [[att]]);
+    const r = await send('commitBatch', [[att]], { dedupe: [deviceId, counter, payloadHash] });
+    if (r.deduped) {
+      const now = await deviceOf(deviceId);
+      return NextResponse.json({ ok: true, accepted: true, deduped: true, trust: String(now.trust), counter: String(counter) });
+    }
+    if (!r.rc) return NextResponse.json({ ok: true, pending: true, trust: String(d.trust), counter: String(counter), tx: r.hash });
 
     let trust = String(d.trust);
     let accepted = null;

@@ -16,6 +16,16 @@ contract GroundTruth {
         bool revoked;
     }
 
+    /// Per-zone aggregate, kept in one storage slot. The map is read from the chain
+    /// as state rather than rebuilt from logs, because the public RPC caps eth_getLogs
+    /// at a 100-block range — an indexer-driven map would forget the room in 30 seconds.
+    struct Cell {
+        uint32 n;
+        uint32 gradeSum;
+        uint32 opinionSum;
+        uint8 worst;        // lowest measured grade ever recorded here; only meaningful once n > 0
+    }
+
     struct Attestation {
         bytes32 deviceId;
         uint64 counter;
@@ -29,9 +39,11 @@ contract GroundTruth {
     }
 
     mapping(bytes32 => Device) public devices;
+    mapping(bytes32 => Cell) public cells;
     mapping(bytes32 => bool) public commitments; // keccak(deviceId, counter, payloadHash)
     uint256 public totalAccepted;
     uint256 public totalRejected;
+    uint256 public deviceCount;
 
     event Enrolled(bytes32 indexed deviceId, uint256 x, uint256 y);
     event Revoked(bytes32 indexed deviceId);
@@ -76,6 +88,7 @@ contract GroundTruth {
         (bytes32 r, bytes32 s) = _derToRS(a.derSignature);
         if (r == 0 || s == 0 || !_p256(_hashOf(a), r, s, uint256(x), uint256(y))) revert("proof");
         devices[id] = Device({x: x, y: y, lastCounter: 0, trust: 1000, revoked: false});
+        deviceCount++;
         emit Enrolled(id, uint256(x), uint256(y));
     }
 
@@ -121,6 +134,11 @@ contract GroundTruth {
             d.lastCounter = a.counter;
             commitments[keccak256(abi.encodePacked(a.deviceId, a.counter, a.payloadHash))] = true;
             d.trust = _score(d.trust, a.opinion, a.grade);
+            Cell storage c = cells[a.cell];
+            if (a.grade < c.worst) c.worst = a.grade; // 0 is the floor, so it never needs seeding
+            c.n++;
+            c.gradeSum += a.grade;
+            c.opinionSum += a.opinion;
             accepted++;
             totalAccepted++;
             emit Committed(a.deviceId, a.counter, a.cell, a.opinion, a.grade, d.trust);

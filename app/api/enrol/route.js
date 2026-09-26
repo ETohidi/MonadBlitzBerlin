@@ -15,8 +15,10 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, deviceId, error: 'proof signature does not verify' }, { status: 400 });
     }
     const d = await deviceOf(deviceId);
-    if (d.x !== 0n) return NextResponse.json({ ok: true, exists: true, deviceId, trust: String(d.trust) });
-    const r = await send('enrol', [x, y, proof]);
+    // bytes32 decodes to a hex string, so compare numerically: `x !== 0n` is always true.
+    if (BigInt(d.x) !== 0n) return NextResponse.json({ ok: true, exists: true, deviceId, trust: String(d.trust) });
+    const r = await send('enrol', [x, y, proof], { wait: 25_000 });
+    if (!r.rc) return NextResponse.json({ ok: true, pending: true, deviceId, tx: r.hash });
     return NextResponse.json({
       ok: r.rc.status === 'success', deviceId, tx: r.hash,
       gasUsed: String(r.rc.gasUsed), costMono: r.costMono, block: String(r.rc.blockNumber),

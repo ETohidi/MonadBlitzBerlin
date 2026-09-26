@@ -12,7 +12,7 @@ import { newDevice, attest } from '../../../lib/attest.mjs';
 export async function POST() {
   if (!address()) return NextResponse.json({ ok: false, error: 'no contract' }, { status: 500 });
   const head = await pub.getBlockNumber();
-  const logs = await pub.getLogs({ address, fromBlock: head > 900n ? head - 900n : 0n, toBlock: head });
+  const logs = await pub.getLogs({ address: address(), fromBlock: head > 900n ? head - 900n : 0n, toBlock: head });
 
   let target = null;
   for (let i = logs.length - 1; i >= 0; i--) {

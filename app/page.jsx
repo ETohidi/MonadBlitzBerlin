@@ -32,7 +32,15 @@ export default function Home() {
       const r = await fetch('/api/enrol', { method: 'POST', body: JSON.stringify({ x, y, proof }) }).then((r) => r.json());
       if (!r.ok) throw new Error(r.error ?? 'rejected');
       setDevice(r.deviceId);
-      setNote(r.exists ? 'Device already on this record. Trust: ' + r.trust : `Enrolled onchain. ${r.gasUsed} gas · tx ${r.tx?.slice(0, 14)}…`);
+      if (r.exists) {
+        setNote('Device already on this record. Trust: ' + r.trust);
+      } else {
+        setNote('Signature checked; waiting for the enrolment to land in a block…');
+        const rc = r.pending ? await settle(r) : { status: 'success', gasUsed: r.gasUsed };
+        setNote(rc?.status === 'success'
+          ? `Enrolled onchain. ${rc.gasUsed} gas · tx ${r.tx.slice(0, 14)}…`
+          : `Broadcast, not in a block yet — the map will pick it up. tx ${r.tx.slice(0, 14)}…`);
+      }
     } catch (e) { setNote('Enrol failed: ' + e.message); }
     setBusy('');
   }
@@ -54,11 +62,33 @@ export default function Home() {
       }).then((r) => r.json());
       setResult(r);
       setNote(r.ok ? `Committed. Your tap and your measurement scored ${r.trust}.` : `Rejected: ${r.reason ?? r.error}`);
+      if (r.ok && r.pending) {
+        setNote('Signed in hardware, broadcast. Waiting for a block…');
+        const rc = await settle(r);
+        if (rc?.found) {
+          setResult({ ...r, ...rc });
+          setNote(rc.accepted
+            ? `Committed in block ${rc.block}. Your tap and your measurement scored ${rc.trust}.`
+            : `The contract refused it: ${rc.reason}.`);
+        } else {
+          setNote('Still in flight — the map picks it up on the next poll.');
+        }
+      }
     } catch (e) { setNote('Failed: ' + e.message); }
     setBusy('');
   }
 
   const cells = st?.cells ?? {};
+
+  async function settle(r, deadline = 45000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < deadline) {
+      const rc = await fetch(`/api/receipt?tx=${r.tx}`).then((x) => x.json()).catch(() => null);
+      if (rc?.found) return { ...r, ...rc, pending: false };
+      await new Promise((res) => setTimeout(res, 1600));
+    }
+    return r;
+  }
 
   return (
     <main style={{ maxWidth: 560, margin: '0 auto', padding: '20px 16px 60px' }}>

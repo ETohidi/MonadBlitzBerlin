@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "app/api/state/route.js": { "maxDuration": 30 },
+    "app/api/receipt/route.js": { "maxDuration": 20 },
+    "app/api/attest/route.js": { "maxDuration": 30 },
+    "app/api/enrol/route.js": { "maxDuration": 45 },
+    "app/api/attack/route.js": { "maxDuration": 60 }
+  }
+}

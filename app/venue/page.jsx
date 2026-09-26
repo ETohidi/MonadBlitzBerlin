@@ -84,7 +84,9 @@ export default function Venue() {
           <div key={i} style={{ color: r.kind === 'Rejected' ? '#e08e0b' : '#8fa0b0' }}>
             {r.kind === 'Rejected'
               ? `✗ ${r.reason} — device ${r.device?.slice(0, 10)}… refused`
-              : `✓ ${WORD[r.opinion]} claimed / ${WORD[r.grade]} measured — trust ${r.trust}`}
+              : r.kind === 'Enrolled'
+                ? `+ device ${r.device?.slice(0, 10)}… enrolled its passkey`
+                : `✓ ${WORD[r.opinion]} claimed / ${WORD[r.grade]} measured — trust ${r.trust}`}
           </div>
         ))}
       </div>
