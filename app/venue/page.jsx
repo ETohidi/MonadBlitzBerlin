@@ -2,171 +2,347 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { zoneRect, CENTRE, COLS, N } from '../../lib/zones.js';
+import { zoneRing, zoneCentre, gridRing, CENTRE, N, NO_DATA, WORD, scoreOf, scoreColor, cellColor, CONTRACT_SHORT } from '../../lib/zones.js';
+import Cheat from './cheat.jsx';
 
-const COLOR = ['#c0392b', '#e08e0b', '#c9b920', '#2ecc71'];
-const WORD = ['unusable', 'poor', 'ok', 'excellent'];
-const STYLE = 'https://demotiles.maplibre.org/style.json';
+const ESRI_TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_ATTRIBUTION = 'Powered by <a href="https://www.esri.com">Esri</a> | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const OSM_ATTRIBUTION = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// Natural Earth boundaries, fetched at runtime; without them a click inside the box still counts
+const COUNTRIES = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json';
+const GERMANY_ID = '276';
+const GERMANY_BOX = [5.87, 47.27, 15.04, 55.06];
+const BERLIN = [13.405, 52.52];
+const CIC = [CENTRE.lng, CENTRE.lat];
+const FLY_MS = 2000;
+const PANEL = 400;
 
-/// 24 rectangles over the CIC site, in the same order the attendee grid uses.
-function zoneData(cells) {
+const BOUNDS = (() => {
+  const r = gridRing(); const xs = r.map((p) => p[0]); const ys = r.map((p) => p[1]);
+  return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
+})();
+const VIEW = {
+  1: { center: [10, 35], zoom: 1.7, base: 'esri' },
+  2: { center: [10.45, 51.1], zoom: 5.4, base: 'osm' },
+  3: { center: [13.41, 52.505], zoom: 11.6, base: 'osm' },
+  4: { base: 'esri' },
+};
+
+/// TopoJSON -> GeoJSON for one object, just enough for polygons.
+function topoFeature(topo, objectName, id) {
+  const [sx, sy] = topo.transform.scale;
+  const [tx, ty] = topo.transform.translate;
+  const arcs = topo.arcs.map((a) => { let x = 0; let y = 0; return a.map(([dx, dy]) => [(x += dx) * sx + tx, (y += dy) * sy + ty]); });
+  const ring = (idx) => idx.flatMap((i, k) => { const a = i < 0 ? [...arcs[~i]].reverse() : arcs[i]; return k ? a.slice(1) : a; });
+  const g = topo.objects[objectName].geometries.find((x) => String(x.id) === id);
+  if (!g) return null;
+  const coordinates = g.type === 'Polygon' ? g.arcs.map(ring) : g.arcs.map((p) => p.map(ring));
+  return { type: 'Feature', properties: {}, geometry: { type: g.type, coordinates } };
+}
+
+function zoneData(cells, basis) {
   return {
     type: 'FeatureCollection',
     features: Array.from({ length: N }, (_, i) => {
-      const r = zoneRect(i);
       const c = cells[i];
       return {
         type: 'Feature',
-        properties: { i, filled: c ? 1 : 0, color: c ? COLOR[Math.round(c.grade / c.n)] : '#1a1f26' },
-        geometry: { type: 'Polygon', coordinates: [[[r.west, r.south], [r.east, r.south], [r.east, r.north], [r.west, r.north], [r.west, r.south]]] },
+        properties: { i, has: c ? 1 : 0, color: cellColor(c, basis) },
+        geometry: { type: 'Polygon', coordinates: [zoneRing(i)] },
       };
     }),
   };
 }
 
+function pin() {
+  const el = document.createElement('div');
+  el.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#ffd24a;border:3px solid #fff;box-shadow:0 0 0 8px rgba(255,210,74,.35);cursor:pointer';
+  return el;
+}
+
+// Every text block sits on this, so it reads over pale street tiles and satellite roofs alike.
+const RAMP = `linear-gradient(90deg, ${Array.from({ length: 9 }, (_, k) => scoreColor(k / 4)).join(', ')})`;
+
+function countPill() {
+  const el = document.createElement('div');
+  el.style.cssText = 'background:rgba(0,0,0,.6);color:#fff;border-radius:8px;padding:0 5px;font:700 11px/16px system-ui;pointer-events:none';
+  return el;
+}
+
+const box = { background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', borderRadius: 14, padding: '14px 18px', color: '#fff' };
+
+const PANELS = {
+  8: [
+    ['Built for Monad', [
+      '100-block eth_getLogs cap on the public RPC → the map is contract storage, read through Multicall3: 24 cells in 31 ms',
+      'Two transactions from one wallet conflict (nonce is state) → batching: 104,383 gas per attestation in a batch of five vs ~169,500 alone',
+      "P-256 precompile (EIP-7951) → verifying a phone's passkey signature costs 6,900 gas",
+      'Blocks every 0.3 s → a tap is on the map before the phone is back in the pocket',
+    ]],
+  ],
+  9: [
+    ['Same contract, other sensors', [
+      'A photo of a street, scored by a model',
+      'A bus arrival, timed by the phone',
+      'An air sensor, read by the phone',
+    ]],
+    ['Who pays', ['Whoever has to be believed — the operator reporting coverage, the city reporting a corridor.']],
+  ],
+};
+
 export default function Venue() {
   const holder = useRef(null);
   const mapRef = useRef(null);
   const stRef = useRef(null);
+  const stage = useRef(1);
+  const basisRef = useRef('opinion');
+  const fallback = useRef(false);
+  const goRef = useRef(() => {});
+  const [view, setView] = useState(1);
   const [st, setSt] = useState(null);
-  const [live, setLive] = useState(false);
-  const [why, setWhy] = useState('');
-  const [attack, setAttack] = useState(null);
-  const [attacking, setAttacking] = useState(false);
+  const [basis, setBasis] = useState('opinion');
+  const [hover, setHover] = useState(null);
+  const [notice, setNotice] = useState('');
   const [origin, setOrigin] = useState('');
+  const [panel, setPanel] = useState(null);
+  const panelRef = useRef(null);
+
+  const pills = useRef([]);
+  const paintZones = () => {
+    mapRef.current?.getSource('zones')?.setData(zoneData(stRef.current?.cells ?? {}, basisRef.current));
+    pills.current.forEach((m, i) => { m.getElement().textContent = String(stRef.current?.cells?.[i]?.n ?? 0); });
+  };
 
   useEffect(() => {
     setOrigin(location.origin);
     const load = () => fetch('/api/state').then((r) => r.json())
-      .then((s) => { setSt(s); stRef.current = s; if (mapRef.current) mapRef.current.getSource('zones')?.setData(zoneData(s.cells ?? {})); })
+      .then((s) => { if (!s.ok) return; setSt(s); stRef.current = s; paintZones(); })
       .catch(() => {});
     load();
     const t = setInterval(load, 2500);
     return () => clearInterval(t);
   }, []);
 
-  // rotating earth -> Berlin -> the CIC floor plan. If the tiles cannot be reached, the
-  // grid below still carries every number, and /venue/flat is the whole page without them.
   useEffect(() => {
-    if (!holder.current || mapRef.current) return;
     const map = new maplibregl.Map({
-      container: holder.current, style: STYLE, center: [-30, 20], zoom: 0.9,
-      minZoom: 0.5, maxZoom: 18, attributionControl: false, interactive: false,
+      container: holder.current,
+      center: VIEW[1].center, zoom: VIEW[1].zoom,
+      attributionControl: false, dragPan: false, scrollZoom: false, boxZoom: false, dragRotate: false,
+      keyboard: false, doubleClickZoom: false, touchZoomRotate: false, touchPitch: false,
+      style: {
+        version: 8,
+        // a globe while zoomed out, flat from country scale down
+        projection: { type: ['interpolate', ['linear'], ['zoom'], 3.5, 'vertical-perspective', 4.5, 'mercator'] },
+        sources: {
+          esri: { type: 'raster', tiles: [ESRI_TILES], tileSize: 256, maxzoom: 19, attribution: ESRI_ATTRIBUTION },
+          osm: { type: 'raster', tiles: [OSM_TILES], tileSize: 256, maxzoom: 19, attribution: OSM_ATTRIBUTION },
+        },
+        layers: [
+          { id: 'bg', type: 'background', paint: { 'background-color': '#04070a' } },
+          { id: 'esri', type: 'raster', source: 'esri', paint: { 'raster-opacity': 1, 'raster-opacity-transition': { duration: 700 } } },
+          { id: 'osm', type: 'raster', source: 'osm', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0, 'raster-opacity-transition': { duration: 700 } } },
+        ],
+      },
     });
     mapRef.current = map;
+    map.addControl(new maplibregl.AttributionControl({ compact: false }), 'bottom-right');
+
+    pills.current = Array.from({ length: N }, (_, i) => { const c = zoneCentre(i); return new maplibregl.Marker({ element: countPill() }).setLngLat([c.lng, c.lat]); });
+    paintZones();
+    const berlin = new maplibregl.Marker({ element: pin() }).setLngLat(BERLIN);
+    const cic = new maplibregl.Marker({ element: pin() }).setLngLat(CIC);
+    berlin.getElement().addEventListener('click', (e) => { e.stopPropagation(); if (stage.current === 2) goRef.current(3); });
+    cic.getElement().addEventListener('click', (e) => { e.stopPropagation(); if (stage.current === 3) goRef.current(4); });
+
+    let base = 'esri';
+    const setBase = (want) => {
+      if (want === base) return;
+      const old = base; base = want;
+      map.setLayoutProperty(want, 'visibility', 'visible');
+      map.setPaintProperty(want, 'raster-opacity', 1);
+      map.setPaintProperty(old, 'raster-opacity', 0);
+      setTimeout(() => { if (base !== old) map.setLayoutProperty(old, 'visibility', 'none'); }, 800);
+    };
+    const show = (ids, on) => ids.forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
+
+    let esriOk = 0; let esriErr = 0;
+    map.on('sourcedata', (e) => { if (e.sourceId === 'esri' && e.tile) esriOk++; });
+    map.on('error', (e) => { if (e.sourceId === 'esri') esriErr++; });
+    const watchSatellite = () => {
+      const ok0 = esriOk; const err0 = esriErr;
+      setTimeout(() => {
+        if (stage.current !== 4 || fallback.current) return;
+        if (esriOk === ok0 && (esriErr > err0 || !map.isSourceLoaded('esri'))) {
+          fallback.current = true;
+          setNotice('Satellite tiles failed to load: showing OpenStreetMap at zoom 18');
+          setBase('osm');
+          map.flyTo({ center: CIC, zoom: 18, duration: FLY_MS });
+        }
+      }, FLY_MS + 5000);
+    };
+
+    const go = (n) => {
+      if (n < 1 || n > 4 || !map.isStyleLoaded()) return;
+      stage.current = n; setView(n); setHover(null);
+      setBase(fallback.current ? 'osm' : VIEW[n].base);
+      show(['germany-fill', 'germany-line'], n <= 2);
+      show(['zone-fill', 'zone-line'], n === 4);
+      if (n === 2) berlin.addTo(map); else berlin.remove();
+      if (n === 3) cic.addTo(map); else cic.remove();
+      pills.current.forEach((m) => (n === 4 ? m.addTo(map) : m.remove()));
+      if (n === 4) {
+        const cam = fallback.current ? { center: CIC, zoom: 18 }
+          : map.cameraForBounds(BOUNDS, { padding: { top: 120, bottom: 50, left: 230, right: PANEL + 20 }, maxZoom: 20 });
+        map.flyTo({ ...cam, bearing: 0, pitch: 0, duration: FLY_MS, essential: true });
+        if (!fallback.current) watchSatellite();
+      } else {
+        map.flyTo({ center: VIEW[n].center, zoom: VIEW[n].zoom, bearing: 0, pitch: 0, duration: FLY_MS, essential: true });
+      }
+    };
+    goRef.current = go;
+
     let raf = 0;
-    const timers = [];
-    const at = (ms, fn) => timers.push(setTimeout(fn, ms));
-
+    let outlined = false;
     map.on('load', () => {
-      try {
-        try { map.setProjection({ type: 'globe' }); } catch { /* older projection API */ }
-        map.addSource('zones', { type: 'geojson', data: zoneData(stRef.current?.cells ?? {}) });
-        map.addLayer({
-          id: 'zone-fill', type: 'fill', source: 'zones',
-          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['interpolate', ['linear'], ['get', 'filled'], 0, 0.35, 1, 0.9] },
-        });
-        map.addLayer({
-          id: 'zone-line', type: 'line', source: 'zones',
-          paint: { 'line-color': '#8fa0b0', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.6, 16, 2.2], 'line-opacity': 0.55 },
-        });
-      } catch (e) { setLive(false); setWhy('layers: ' + e.message); return; }
-      setLive(true);
+      map.addSource('germany', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'germany-fill', type: 'fill', source: 'germany', paint: { 'fill-color': '#ffd24a', 'fill-opacity': 0.35 } });
+      map.addLayer({ id: 'germany-line', type: 'line', source: 'germany', paint: { 'line-color': '#ffd24a', 'line-width': 2.5 } });
+      map.addSource('zones', { type: 'geojson', data: zoneData(stRef.current?.cells ?? {}, basisRef.current) });
+      map.addLayer({ id: 'zone-fill', type: 'fill', source: 'zones', layout: { visibility: 'none' },
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'has'], 1], 0.62, 0.3] } });
+      map.addLayer({ id: 'zone-line', type: 'line', source: 'zones', layout: { visibility: 'none' },
+        paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-opacity': 0.8 } });
 
-      // Spin, then two hops: the planet, Berlin, the floor. Timed rather than chained on
-      // moveend, because a dropped frame must not strand the sequence mid-flight.
-      const t0 = performance.now();
-      let lng = -30;
+      fetch(COUNTRIES).then((r) => r.json()).then((topo) => {
+        const de = topoFeature(topo, 'countries', GERMANY_ID);
+        if (de) { map.getSource('germany').setData({ type: 'FeatureCollection', features: [de] }); outlined = true; }
+      }).catch(() => {});
+
       const spin = () => {
-        const dt = performance.now() - t0;
-        if (dt > 4200) return;
-        lng += 0.16;
-        map.jumpTo({ center: [lng, 16 + Math.sin(dt / 900) * 4], zoom: 1.02 + dt / 26000 });
+        if (stage.current === 1 && !map.isEasing()) {
+          const c = map.getCenter();
+          map.setCenter([c.lng + 0.035, c.lat]);
+        }
         raf = requestAnimationFrame(spin);
       };
       spin();
-      at(4400, () => map.flyTo({ center: [CENTRE.lng, CENTRE.lat], zoom: 11.2, duration: 3400, curve: 1.3 }));
-      at(8000, () => map.easeTo({ center: [CENTRE.lng, CENTRE.lat], zoom: 15.9, pitch: 52, duration: 3000 }));
-      at(11200, () => map.setOptions({ interactive: true, dragRotate: true, scrollZoom: true }));
-      at(20000, () => map.easeTo({ center: [CENTRE.lng, CENTRE.lat], zoom: 15.4, pitch: 38, duration: 2600 }));
     });
-    map.on('error', (e) => setWhy((w) => w || `style: ${e?.error?.message ?? e?.statusText ?? 'unknown'}`));
-    return () => { cancelAnimationFrame(raf); timers.forEach(clearTimeout); map.remove(); mapRef.current = null; };
+
+    map.on('click', (e) => {
+      if (stage.current !== 1) return;
+      const hit = map.queryRenderedFeatures(e.point, { layers: ['germany-fill'] }).length > 0;
+      const [w, s, east, n] = GERMANY_BOX;
+      const inBox = e.lngLat.lng >= w && e.lngLat.lng <= east && e.lngLat.lat >= s && e.lngLat.lat <= n;
+      if (hit || (!outlined && inBox)) go(2);
+    });
+    map.on('mousemove', 'zone-fill', (e) => setHover(e.features?.[0]?.properties?.i ?? null));
+    map.on('mouseleave', 'zone-fill', () => setHover(null));
+
+    const showPanel = (p) => { panelRef.current = p; setPanel(p); };
+    const onKey = (e) => {
+      if (e.key === '8' || e.key === '9') showPanel(Number(e.key));
+      else if (e.key === 'Escape' && panelRef.current) showPanel(null);
+      else if (e.key >= '1' && e.key <= '4') { showPanel(null); go(Number(e.key)); }
+      else if (e.key === 'Escape' && stage.current > 1) go(stage.current - 1);
+      else if (e.key === 'm' || e.key === 'M') {
+        basisRef.current = basisRef.current === 'opinion' ? 'grade' : 'opinion';
+        setBasis(basisRef.current); paintZones();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); cancelAnimationFrame(raf); map.remove(); mapRef.current = null; };
   }, []);
 
   const cells = st?.cells ?? {};
-  const recent = (st?.recent ?? []).slice(-7).reverse();
-  const filled = Object.keys(cells).length;
+  const recent = (st?.recent ?? []).slice(-8).reverse();
+  const h = hover != null ? cells[hover] : null;
 
   return (
-    <main style={{ display: 'flex', gap: 22, padding: '20px 26px', minHeight: '100vh', boxSizing: 'border-box' }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <h1 style={{ fontSize: 34, margin: 0 }}>Ground Truth <span style={{ fontSize: 19, color: '#9fb0c0', fontWeight: 400 }}>CIC Berlin · 52.4940, 13.4463</span></h1>
-          <span style={{ fontSize: 15, color: live ? '#2ecc71' : '#e08e0b' }}>{live ? 'globe live' : why ? `globe unavailable — ${why}` : 'globe unavailable — numbers below still live'}</span>
-        </div>
-        <div ref={holder} style={{ height: 'calc(100vh - 330px)', minHeight: 340, borderRadius: 14, overflow: 'hidden', background: '#04070a', border: '1px solid #23282f', margin: '10px 0 12px' }} />
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS}, 1fr)`, gap: 6, maxWidth: 560 }}>
-          {Array.from({ length: N }, (_, i) => {
-            const c = cells[i];
-            const avg = c ? Math.round(c.grade / c.n) : null;
-            return (
-              <div key={i} style={{
-                aspectRatio: '1.6', borderRadius: 7, background: c ? COLOR[avg] : '#14181d',
-                border: '1px solid #23282f', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 15, fontWeight: 800, color: c ? '#04070a' : '#3a4552',
-              }}>{c ? c.n : ''}</div>
-            );
-          })}
-        </div>
-        <div style={{ display: 'flex', gap: 22, marginTop: 14, fontSize: 17, color: '#cfd8e0', flexWrap: 'wrap' }}>
-          <span><b>{st?.devices ?? 0}</b> devices</span>
-          <span><b>{st?.totalAccepted ?? 0}</b> attestations onchain</span>
-          <span style={{ color: '#e08e0b' }}><b>{st?.totalRejected ?? 0}</b> refused</span>
-          <span><b>{filled}</b>/24 zones reporting</span>
-          <span><b>{st?.secondsPerBlock ?? '–'}</b>s per block</span>
-          <span style={{ color: '#8fa0b0' }}>6,900 gas per P-256 verify</span>
-        </div>
-      </div>
+    <main style={{ position: 'fixed', inset: 0, background: '#04070a' }}>
+      <div ref={holder} style={{ position: 'absolute', inset: 0 }} />
 
-      <div style={{ width: 320, flexShrink: 0, textAlign: 'center' }}>
-        {origin && (
-          <img src={`/api/qr?target=${encodeURIComponent(origin)}`} width={300} height={300}
-            style={{ background: '#fff', borderRadius: 14, padding: 8 }} alt="Scan to contribute a reading" />
-        )}
-        <div style={{ fontSize: 19, marginTop: 8 }}>Scan. One tap enrolls your passkey, one tap attests.</div>
-        <div style={{ fontSize: 14, color: '#8fa0b0', marginTop: 4 }}>{origin?.replace(/^https:\/\//, '')}</div>
-        <div style={{ fontSize: 14, color: '#8fa0b0', marginTop: 14, textAlign: 'left' }}>
-          Each zone is ~200 m across. The squares above are the same 24 zones drawn on the globe;
-          the numbers come from contract storage, not from a database behind this page.
+      <header style={{ position: 'absolute', top: 16, left: view === 4 ? 220 : 0, right: view === 4 ? PANEL : 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+        <div style={{ ...box, textAlign: 'center', padding: '12px 26px' }}>
+          <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1 }}>Ground Truth</div>
+          <div style={{ fontSize: 21, color: '#dfe7ee' }}>Reported by everyone, edited by no one.</div>
         </div>
-        <button onClick={async () => {
-          setAttacking(true); setAttack(null);
-          const r = await fetch('/api/attack', { method: 'POST' }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
-          setAttack(r); setAttacking(false);
-        }} disabled={attacking}
-          style={{ marginTop: 14, width: '100%', padding: '12px 16px', borderRadius: 10, border: '1px solid #4a3118', background: '#2a1c0e', color: '#f0c674', fontWeight: 700, fontSize: 16 }}>
-          {attacking ? 'Submitting to the chain…' : '▶ Run the attacker: replay, ghost key, forged signature'}
-        </button>
-        {attack?.ok && (
-          <div style={{ marginTop: 10, fontSize: 16, color: '#f0c674', textAlign: 'left' }}>
-            chain refused {attack.refused.length}/3 — {attack.refused.join(' · ')} — {attack.gasUsed} gas
-          </div>
-        )}
-        {attack && !attack.ok && <div style={{ marginTop: 10, color: '#e08e0b' }}>{attack.error}</div>}
-        <div style={{ marginTop: 16, borderTop: '1px solid #1d242c', paddingTop: 10, fontSize: 15, textAlign: 'left' }}>
-          {recent.map((r, i) => (
-            <div key={i} style={{ color: r.kind === 'Rejected' ? '#e08e0b' : r.kind === 'Enrolled' ? '#5aa9e6' : '#8fa0b0' }}>
-              {r.kind === 'Rejected'
-                ? `✗ ${r.reason} — device ${r.device?.slice(0, 10)}… refused`
-                : r.kind === 'Enrolled'
-                  ? `＋ passkey enrolled ${r.device?.slice(0, 10)}…`
-                  : `✓ ${WORD[r.opinion]} claimed / ${WORD[r.grade]} measured — trust ${r.trust}`}
+      </header>
+
+      {notice && (
+        <div style={{ ...box, position: 'absolute', top: 132, left: '50%', transform: 'translateX(-50%)', color: '#f2a516', fontSize: 17 }}>{notice}</div>
+      )}
+
+      {view === 4 && (
+        <>
+          <div style={{ ...box, position: 'absolute', top: 16, left: 16, fontSize: 16 }}>
+            <div style={{ width: 220, height: 14, borderRadius: 4, background: RAMP }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: 220, marginTop: 4 }}><span>poor</span><span>ok</span><span>excellent</span></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+              <span style={{ width: 20, height: 12, borderRadius: 3, background: NO_DATA }} />no reports
             </div>
-          ))}
-        </div>
-        <a href="/venue/flat" style={{ fontSize: 13, color: '#5a6b7a' }}>flat fallback view</a>
-      </div>
+            <div style={{ color: '#c9d4de', fontSize: 14, marginTop: 6 }}>
+              unweighted mean · faded = 1 report{basis === 'grade' ? ' · measured grade' : ''}
+            </div>
+          </div>
+
+          {hover != null && (
+            <div style={{ ...box, position: 'absolute', left: 16, bottom: 76, fontSize: 16 }}>
+              <b>Zone {hover + 1}</b>{' '}
+              {h ? (
+                <>
+                  · {h.n} report{h.n === 1 ? '' : 's'}
+                  <div>tapped: {scoreOf(h.opinion, h.n).toFixed(1)} · measured: {scoreOf(h.grade, h.n).toFixed(1)} · worst {WORD[h.worst]}</div>
+                  <div style={{ color: '#c9d4de', fontSize: 13 }}>unweighted mean, poor 0 · ok 1 · excellent 2</div>
+                </>
+              ) : '· no reports'}
+            </div>
+          )}
+
+          <aside style={{ position: 'absolute', top: 16, right: 16, bottom: 44, width: PANEL - 60, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {origin && (
+              <img src={`/api/qr?target=${encodeURIComponent(origin)}`} width={240} height={240}
+                style={{ background: '#fff', borderRadius: 12, padding: 6, alignSelf: 'center' }} alt="Scan to report" />
+            )}
+            <div style={{ ...box, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 15 }}>
+              <span><b>{st?.devices ?? '–'}</b> phones</span>
+              <span><b>{st?.totalAccepted ?? '–'}</b> readings onchain</span>
+              <span style={{ color: '#ffb4a8' }}><b>{st?.totalRejected ?? '–'}</b> refused</span>
+              <span><b>{st?.secondsPerBlock ?? '–'}</b> s per block</span>
+              <span style={{ gridColumn: '1 / -1', color: '#c9d4de' }}>6,900 gas per signature check</span>
+            </div>
+            <div style={box}><Cheat fontSize={15} /></div>
+            <div style={{ ...box, flex: 1, minHeight: 0, overflow: 'hidden', fontSize: 14 }}>
+              {recent.map((r, i) => (
+                <div key={i} style={{ color: r.kind === 'Rejected' ? '#ffb4a8' : r.kind === 'Enrolled' ? '#7cc4ff' : '#e6edf3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {r.kind === 'Rejected' ? `✗ refused: ${r.reason}`
+                    : r.kind === 'Enrolled' ? '+ new phone enrolled'
+                      : `✓ tapped ${WORD[r.opinion]} · measured ${WORD[r.grade]} · trust ${r.trust}`}
+                </div>
+              ))}
+            </div>
+          </aside>
+        </>
+      )}
+
+      <footer style={{ ...box, position: 'absolute', left: 16, bottom: 16, padding: '8px 14px', fontSize: 14, color: '#c9d4de' }}>
+        Powered by Monad testnet · block {st?.head ?? '–'} · contract {CONTRACT_SHORT}
+      </footer>
+
+      {panel && (
+        <section style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          <div style={{ ...box, background: 'rgba(0,0,0,.6)', maxWidth: '82vw', padding: '4.5vh 4vw' }}>
+            {PANELS[panel].map(([heading, lines], k) => (
+              <div key={heading} style={{ marginTop: k ? '5vh' : 0 }}>
+                <div style={{ fontSize: 'min(6.4vh, 4vw)', fontWeight: 800, lineHeight: 1.1, marginBottom: '2.4vh' }}>{heading}</div>
+                {lines.map((l) => (
+                  <div key={l} style={{ fontSize: 'min(3.7vh, 2.3vw)', lineHeight: 1.3, margin: '1.6vh 0', color: '#e6edf3' }}>{lines.length > 1 ? '· ' : ''}{l}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

@@ -1,14 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
-
-const COLS = 6; const N = 24;
-const COLOR = ['#c0392b', '#e08e0b', '#c9b920', '#2ecc71'];
-const WORD = ['unusable', 'poor', 'ok', 'excellent'];
+import { COLS, N, WORD, cellColor } from '../../../lib/zones.js';
+import Cheat from '../cheat.jsx';
 
 export default function Venue() {
   const [st, setSt] = useState(null);
-  const [attack, setAttack] = useState(null);
-  const [attacking, setAttacking] = useState(false);
   const [origin, setOrigin] = useState('');
 
   useEffect(() => {
@@ -34,10 +30,9 @@ export default function Venue() {
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${COLS}, 1fr)`, gap: 10, maxWidth: 640 }}>
             {Array.from({ length: N }, (_, i) => {
               const c = cells[i];
-              const avg = c ? Math.round(c.grade / c.n) : null;
               return (
                 <div key={i} style={{
-                  aspectRatio: '1', borderRadius: 12, background: c ? COLOR[avg] : '#14181d',
+                  aspectRatio: '1', borderRadius: 12, background: cellColor(c),
                   border: '1px solid #23282f', display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 26, fontWeight: 800, color: c ? '#04070a' : '#3a4552',
                 }}>{c ? c.n : ''}</div>
@@ -65,21 +60,8 @@ export default function Venue() {
         </div>
       </div>
 
-      <div style={{ marginTop: 24 }}>
-        <button onClick={async () => {
-          setAttacking(true); setAttack(null);
-          const r = await fetch('/api/attack', { method: 'POST' }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
-          setAttack(r); setAttacking(false);
-        }} disabled={attacking}
-          style={{ padding: '12px 20px', borderRadius: 10, border: '1px solid #4a3118', background: '#2a1c0e', color: '#f0c674', fontWeight: 700, fontSize: 17 }}>
-          {attacking ? 'Submitting to the chain…' : '▶ Run the attacker: replay, ghost key, forged signature'}
-        </button>
-        {attack?.ok && (
-          <span style={{ marginLeft: 18, fontSize: 18, color: '#f0c674' }}>
-            chain refused {attack.refused.length}/3 — {attack.refused.join(' · ')} — {attack.gasUsed} gas
-          </span>
-        )}
-        {attack && !attack.ok && <span style={{ marginLeft: 18, color: '#e08e0b' }}>{attack.error}</span>}
+      <div style={{ marginTop: 24, maxWidth: 560 }}>
+        <Cheat fontSize={18} />
       </div>
 
       <div style={{ marginTop: 26, borderTop: '1px solid #1d242c', paddingTop: 12, fontSize: 17 }}>
