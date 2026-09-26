@@ -16,3 +16,6 @@ AllInfo/
 .DS_Store
 .vercel/
 *.log
+out/
+.address
+.env.local
