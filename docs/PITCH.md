@@ -29,7 +29,7 @@ this is per tap and not per packet. And 0.3-second blocks mean the room sees its
 Say plainly: the chain is **not** in the control loop. Nothing here should steer a radio. It is the
 record that gets disputed later.
 
-**1:50 — the attacks.** Press `▶ Run the attacker`. Four hostile submissions go in as one batch:
+**1:50 — the attacks.** Press `Try to cheat`. Four hostile submissions go in as one batch:
 yesterday's reading replayed, a valid signature from a key nobody ever enrolled, a signature made
 by the wrong key over someone else's device id, and a confident lie — a phone that measured the
 worst grade while the human tapped "excellent". Three come back refused with a reason. The lie is
