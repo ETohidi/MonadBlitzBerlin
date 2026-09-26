@@ -6,7 +6,7 @@ build/
 broadcast/
 cache/
 artifacts/
-lib/
+/contracts/lib/
 .env
 .env.*
 !.env.example
